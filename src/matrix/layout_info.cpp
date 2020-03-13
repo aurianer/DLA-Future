@@ -19,13 +19,12 @@ LayoutInfo::LayoutInfo(const LocalElementSize& size, const TileElementSize& bloc
                        SizeType tile_offset_row, SizeType tile_offset_col)
     : size_(size), nr_tiles_(0, 0), block_size_(block_size), ld_tile_(tile_ld),
       tile_offset_row_(tile_offset_row), tile_offset_col_(tile_offset_col) {
-  using util::size_t::sum;
+  using dlaf::util::ceilDiv;
 
   DLAF_ASSERT(size_.isValid(), "Invalid Matrix size!");
   DLAF_ASSERT(!block_size_.isEmpty(), "Invalid Block size!");
 
-  nr_tiles_ = {util::ceilDiv(size_.rows(), block_size_.rows()),
-               util::ceilDiv(size_.cols(), block_size_.cols())};
+  nr_tiles_ = {ceilDiv(size_.rows(), block_size_.rows()), ceilDiv(size_.cols(), block_size_.cols())};
 
   if (size_.isEmpty()) {
     DLAF_ASSERT(ld_tile_ >= 1, "Invalid Leading Dimension!", ld_tile_);
@@ -41,8 +40,7 @@ LayoutInfo::LayoutInfo(const LocalElementSize& size, const TileElementSize& bloc
     DLAF_ASSERT(tile_offset_row_ >= static_cast<std::size_t>(max_rows_tiles),
                 "Invalid Tile Row Offset!");
     DLAF_ASSERT(tile_offset_row_ >= minTileMemSize(block_size_) ||
-                    static_cast<std::size_t>(ld_tile_) >=
-                        sum(tileOffset({nr_tiles_.rows() - 1, 0}), last_rows),
+                    ld_tile_ >= tileOffset({nr_tiles_.rows() - 1, 0}) + last_rows,
                 "Invalid Leading Dimension & Tile Row Offset combination!");
     DLAF_ASSERT(tile_offset_col_ >= tileOffset({nr_tiles_.rows() - 1, 0}) +
                                         minTileMemSize(LocalTileIndex(nr_tiles_.rows() - 1, 0)),

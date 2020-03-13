@@ -26,6 +26,9 @@
 namespace dlaf {
 namespace matrix {
 
+template <class T, Device device>
+class MatrixView;
+
 /// A @c Matrix object represents a collection of tiles which contain all the elements of a matrix.
 ///
 /// The tiles are distributed according to a distribution (see @c Matrix::distribution()),
@@ -41,6 +44,7 @@ public:
   using TileType = Tile<ElementType, device>;
   using ConstTileType = Tile<const ElementType, device>;
   friend Matrix<const ElementType, device>;
+  friend MatrixView<ElementType, device>;
 
   /// Create a non distributed matrix of size @p size and block size @p block_size.
   ///
@@ -109,12 +113,9 @@ public:
     return operator()(this->distribution().localTileIndex(index));
   }
 
-protected:
-  using Matrix<const T, device>::tileLinearIndex;
-
 private:
+  using Matrix<const T, device>::tileManager;
   using Matrix<const T, device>::setUpTiles;
-  using Matrix<const T, device>::tile_managers_;
 };
 
 template <class T, Device device>
@@ -162,6 +163,8 @@ protected:
   Matrix(Distribution distribution) : internal::MatrixBase{std::move(distribution)} {}
 
   void setUpTiles(const memory::MemoryView<ElementType, device>& mem, const LayoutInfo& layout) noexcept;
+
+  internal::TileFutureManager<T, device>& tileManager(const LocalTileIndex& index);
 
   std::vector<internal::TileFutureManager<T, device>> tile_managers_;
 };

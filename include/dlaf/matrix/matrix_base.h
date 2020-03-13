@@ -87,7 +87,7 @@ protected:
   ///
   /// @pre index.isIn(localNrTiles()).
   SizeType tileLinearIndex(const LocalTileIndex& index) const noexcept {
-    return index.row() + distribution_->localNrTiles().rows() * static_cast<SizeType>(index.col());
+    return index.row() + distribution_->localNrTiles().rows() * index.col();
   }
 
   /// Prints information about the matrix.
