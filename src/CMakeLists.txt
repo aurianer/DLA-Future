@@ -93,6 +93,7 @@ add_library(dlaf.core
     communication/datatypes.cpp
     matrix/distribution.cpp
     matrix/layout_info.cpp
+    matrix/matrix_view.cpp
     matrix/tile.cpp
     matrix.cpp
     memory/memory_view.cpp
