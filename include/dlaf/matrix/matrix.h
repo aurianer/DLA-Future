@@ -26,6 +26,7 @@
 namespace dlaf {
 namespace matrix {
 
+// Forward declaration
 template <class T, Device device>
 class MatrixView;
 
