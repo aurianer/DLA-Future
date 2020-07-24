@@ -58,7 +58,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
     const LocalTileIndex index_tile_x0{j_current_panel, j_current_panel};
 
     // for each column in the panel, compute reflector and update panel
-    for (SizeType j_local_reflector = 0; j_local_reflector < nb; ++j_local_reflector) {  // TODO fix tile size
+    for (SizeType j_local_reflector = 0; j_local_reflector < nb; ++j_local_reflector) {
       std::cout << ">>> computing local reflector " << j_local_reflector << std::endl;
 
       const TileElementIndex index_el_x0{j_local_reflector, j_local_reflector};
@@ -108,66 +108,59 @@ int miniapp(hpx::program_options::variables_map& vm) {
         }
       }
 
-      // compute W
-      const LocalElementSize W_size{1, distribution.blockSize().cols()};
-      MatrixType W(W_size, distribution.blockSize());
-      {
-        TileType w = W(LocalTileIndex{0, 0}).get();
+      // is there a remaining panel?
+      if (j_local_reflector < nb - 1) {
+        // compute W
+        const LocalElementSize W_size{1, nb};
+        MatrixType W(W_size, distribution.blockSize());
+        {
+          TileType w = W(LocalTileIndex{0, 0}).get();
 
-        for (int sub_j = index_el_x0.col() + 1; sub_j < W.blockSize().cols(); ++sub_j)
-          w({0, sub_j}) = 0;
+          // for each tile in the panel
+          for (SizeType h = index_tile_x0.row(); h < distribution.nrTiles().rows(); ++h) {
+            const LocalTileIndex index_a{h, j_current_panel};
+            const ConstTileType& tile = A.read(index_a).get();
 
-        // for each tile in the panel
-        for (SizeType h = index_tile_x0.row(); h < distribution.nrTiles().rows(); ++h) {
-          std::cout << "h " << h << std::endl;
+            // consider just the trailing panel
+            // i.e. all rows (height = reflector), just columns to the right of the current reflector
+            const SizeType first_element_in_tile = (h == index_tile_x0.row()) ? index_el_x0.row() : 0;
 
-          const LocalTileIndex index_a{h, j_current_panel};
-          const ConstTileType& tile = A.read(index_a).get();
+            const TileElementSize A_size{tile.size().rows() - first_element_in_tile,
+                                         tile.size().cols() - (index_el_x0.col() + 1)};
+            const TileElementIndex A_start{first_element_in_tile, index_el_x0.col() + 1};
+            const TileElementIndex V_start{first_element_in_tile, index_el_x0.col()};
+            const TileElementIndex W_start{0, index_el_x0.col() + 1};
 
-          // consider just the trailing panel
-          // i.e. all rows (height = reflector), just columns to the right of the current reflector
-          const SizeType first_element_in_tile = (h == index_tile_x0.row()) ? index_el_x0.row() : 0;
-          for (SizeType sub_i = first_element_in_tile; sub_i < tile.size().rows(); ++sub_i) {
-            const TileElementIndex index_el_v{sub_i, index_el_x0.col()};
-            const Type v = tile(index_el_v);
-
-            std::cout << "v" << index_a << index_el_v << " " << v << std::endl;
-
-            for (SizeType sub_j = index_el_x0.col() + 1; sub_j < tile.size().cols(); ++sub_j) {
-              const TileElementIndex index_el_a{sub_i, sub_j};
-              const Type a = tile(index_el_a);
-
-              const TileElementIndex index_el_w{0, sub_j};
-              w(index_el_w) += v * a;
-
-              std::cout << "w_p " << index_el_a << " @ " << index_a << index_el_w << " = " << w({0, sub_j}) << " " << v << " " << a << std::endl;
-            }
+            // w = P* . v
+            const Type beta = (h == index_tile_x0.row() ? 0 : 1);
+            blas::gemv(blas::Layout::ColMajor, blas::Op::ConjTrans, A_size.rows(), A_size.cols(), 1.0,
+                       tile.ptr(A_start), tile.ld(), tile.ptr(V_start), 1, beta, w.ptr(W_start), w.ld());
           }
         }
-      }
-      std::cout << "W" << std::endl;
-      print(W);
+        std::cout << "W" << std::endl;
+        print(W);
 
-      // update trailing panel
-      {
-        TileType w = W(LocalTileIndex{0, 0}).get();
+        // update trailing panel
+        {
+          TileType w = W(LocalTileIndex{0, 0}).get();
 
-        for (SizeType h = index_tile_x0.row(); h < distribution.nrTiles().rows(); ++h) {
-          TileType tile_a = A(LocalTileIndex{h, j_current_panel}).get();
+          for (SizeType h = index_tile_x0.row(); h < distribution.nrTiles().rows(); ++h) {
+            TileType tile_a = A(LocalTileIndex{h, j_current_panel}).get();
 
-          const SizeType first_element_in_tile = (h == index_tile_x0.row()) ? index_el_x0.row() : 0;
-          for (SizeType sub_i = first_element_in_tile; sub_i < tile_a.size().rows(); ++sub_i) {
-            const Type v = tile_a({sub_i, j_local_reflector});
+            const SizeType first_element_in_tile = (h == index_tile_x0.row()) ? index_el_x0.row() : 0;
 
-            std::cout << "v = " << v << std::endl;
+            const TileElementSize V_size{tile_a.size().rows() - first_element_in_tile, 1};
+            const TileElementSize W_size{1, tile_a.size().cols() - (index_el_x0.col() + 1)};
+            const TileElementSize A_size{V_size.rows(), W_size.cols()};
 
-            for (SizeType sub_j = j_local_reflector + 1; sub_j < tile_a.size().cols(); ++sub_j) {
-              const TileElementIndex index_el_a{sub_i, sub_j};
-              Type& a = tile_a(index_el_a);
-              std::cout << "a " << index_el_a << " " << tau << " " << v << " " << w({0, sub_j}) << std::endl;
-              a -= tau * v * w({0, sub_j});
-              std::cout << "a " << index_el_a << "=" << a << std::endl;
-            }
+            const TileElementIndex A_start{first_element_in_tile, index_el_x0.col() + 1};
+            const TileElementIndex V_start{first_element_in_tile, index_el_x0.col()};
+            const TileElementIndex W_start{0, index_el_x0.col() + 1};
+
+            // Pt = Pt - tau * v * w*
+            const Type alpha = -tau;
+            blas::ger(blas::Layout::ColMajor, A_size.rows(), A_size.cols(), alpha, tile_a.ptr(V_start),
+                      1, w.ptr(W_start), w.ld(), tile_a.ptr(A_start), tile_a.ld());
           }
         }
       }
