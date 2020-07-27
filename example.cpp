@@ -1,9 +1,10 @@
-#include <iostream>
 #include <cmath>
+#include <iostream>
 
 #include <hpx/hpx.hpp>
 #include <hpx/hpx_init.hpp>
 
+#include "dlaf/common/index2d.h"
 #include "dlaf/common/range2d.h"
 #include "dlaf/matrix.h"
 #include "dlaf/matrix/index.h"
@@ -50,15 +51,23 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
   // for each panel
   for (SizeType j_current_panel = 0; j_current_panel < distribution.nrTiles().cols(); ++j_current_panel) {
+    // TODO just for debugging, compute just first panel
     if (j_current_panel > 0)
       break;
 
     std::cout << ">>> computing panel " << j_current_panel << std::endl;
 
     const LocalTileIndex index_tile_x0{j_current_panel, j_current_panel};
+    const LocalTileSize size_current_panel{distribution.nrTiles().rows() - index_tile_x0.row(), 1};
+
+    MatrixType T(LocalElementSize{nb, nb}, distribution.blockSize());
 
     // for each column in the panel, compute reflector and update panel
     for (SizeType j_local_reflector = 0; j_local_reflector < nb; ++j_local_reflector) {
+      // TODO fix check: is there a panel underneath to annihilate?
+      if (size_current_panel.rows() == 1 && j_local_reflector == nb - 1)
+        break;
+
       std::cout << ">>> computing local reflector " << j_local_reflector << std::endl;
 
       const TileElementIndex index_el_x0{j_local_reflector, j_local_reflector};
@@ -131,7 +140,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
             const TileElementIndex V_start{first_element_in_tile, index_el_x0.col()};
             const TileElementIndex W_start{0, index_el_x0.col() + 1};
 
-            // w = P* . v
+            // w += 1 . A* . v
             const Type beta = (h == index_tile_x0.row() ? 0 : 1);
             blas::gemv(blas::Layout::ColMajor, blas::Op::ConjTrans, A_size.rows(), A_size.cols(), 1.0,
                        tile.ptr(A_start), tile.ld(), tile.ptr(V_start), 1, beta, w.ptr(W_start), w.ld());
@@ -170,10 +179,84 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
       std::cout << 'A' << std::endl;
       print(A);
+
+      // TODO compute T-factor component for this reflector
+      // T(0:j, j) = T(0:j, 0:j) . -tau(j) . V(j:, 0:j)* . V(j:, j)
+      const TileElementSize T_size{index_el_x0.row(), 1};
+      const TileElementIndex T_start{0, index_el_x0.col()};
+      {
+        TileType tile_t = T(LocalTileIndex{0, 0}).get();
+        for (const auto& index_v : iterate_range2d(index_tile_x0, size_current_panel)) {
+          std::cout << "* computing T " << index_v << std::endl;
+
+          const SizeType first_element_in_tile = (index_v.row() == index_tile_x0.row()) ? index_el_x0.row() + 1 : 0;
+
+          const ConstTileType& tile_v = A.read(index_v).get();
+
+          // T(0:j, j) = -tau . V(j:, 0:j)* . V(j:, j)
+          // [j x 1] = [(n-j) x j]* . [(n-j) x 1]
+          const TileElementSize V_size{tile_v.size().rows() - first_element_in_tile, index_el_x0.col()};
+          const TileElementIndex Va_start{first_element_in_tile, 0};
+          const TileElementIndex Vb_start{first_element_in_tile, index_el_x0.col()};
+
+          // set tau on the diagonal
+          if (index_v.row() == index_tile_x0.row()) {
+            std::cout << "t on diagonal " << tau << std::endl;
+            tile_t(index_el_x0) = tau;
+
+            // compute first component with implicit one
+            for (const auto& index_el_t : iterate_range2d(T_start, T_size)) {
+              const auto index_el_va = dlaf::common::internal::transposed(index_el_t);
+              tile_t(index_el_t) = -tau * tile_v(index_el_va);
+
+              std::cout << tile_t(index_el_t) << " " << -tau << " " << tile_v(index_el_va) << std::endl;
+            }
+          }
+
+          std::cout << "GEMV?" << Va_start << " " << V_size << "  " << Vb_start << std::endl;
+          if (Va_start.row() < tile_v.size().rows() && Vb_start.row() < tile_v.size().rows()) {
+            std::cout << "GEMV!" << std::endl;
+            for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
+              std::cout << "t[" << i_loc << "] " << tile_t({i_loc, j_local_reflector}) << std::endl;
+
+            // t = -tau . V* . V
+            const Type alpha = -tau;
+            const Type beta = 1;
+            blas::gemv(blas::Layout::ColMajor, blas::Op::ConjTrans,
+                V_size.rows(), V_size.cols(),
+                alpha,
+                tile_v.ptr(Va_start), tile_v.ld(),
+                tile_v.ptr(Vb_start), 1,
+                beta, tile_t.ptr(T_start), 1);
+
+            for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
+              std::cout << "t*[" << i_loc << "] " << tile_t({i_loc, j_local_reflector}) << std::endl;
+          }
+        }
+
+        std::cout << "TRMV" << std::endl;
+        for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
+          std::cout << "t[" << i_loc << "] " << tile_t({i_loc, j_local_reflector}) << std::endl;
+
+        std::cout << tile_t(T_start) << " " << tile_t({0, 0}) << std::endl;
+
+        // t = T . t
+        blas::trmv(
+            blas::Layout::ColMajor,
+            blas::Uplo::Upper, blas::Op::NoTrans, blas::Diag::NonUnit,
+            j_local_reflector,
+            tile_t.ptr({0, 0}), tile_t.ld(),
+            tile_t.ptr(T_start), 1);
+
+        for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
+          std::cout << "t[" << i_loc << "] " << tile_t({i_loc, j_local_reflector}) << std::endl;
+      }
+
+      std::cout << "T" << std::endl;
+      print(T);
     }
 
-    // TODO compute T-factor
-    // TODO update each panel with the T-factor
+    // TODO update trailing matrix
   }
 
   std::cout << 'A' << std::endl;
