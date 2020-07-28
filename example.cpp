@@ -10,6 +10,7 @@
 #include "dlaf/matrix/index.h"
 #include "dlaf/types.h"
 #include "dlaf/util_matrix.h"
+#include "dlaf/lapack_tile.h"
 
 using Type = double;
 
@@ -257,6 +258,63 @@ int miniapp(hpx::program_options::variables_map& vm) {
     }
 
     // TODO update trailing matrix
+    const LocalTileIndex At_start{index_tile_x0.row(), index_tile_x0.col() + 1};
+
+    std::cout << "update trailing matrix " << At_start << std::endl;
+
+    MatrixType W({Ai_size.rows() * nb, Ai_size.cols() * nb}, distribution.blockSize());
+
+    {
+      const ConstTileType& tile_t = T.read(LocalTileIndex{0, 0}).get();
+
+      for (SizeType i_t = At_start.row(); i_t < distribution.nrTiles().rows(); ++i_t) {
+        const LocalTileIndex index_tile_v{i_t, j_current_panel};
+        const LocalTileIndex index_tile_w{i_t - At_start.row(), 0};
+
+        std::cout << "computing W" << index_tile_w << " with V " << index_tile_v << std::endl;
+
+        // TODO TRMM W = V . T
+        TileType tile_w = W(index_tile_w).get();
+
+        // copy
+        const ConstTileType& tile_v = A.read(index_tile_v).get();
+
+        const bool is_diagonal_tile = index_tile_v.row() == At_start.row();
+
+        lapack::lacpy(
+            is_diagonal_tile ? lapack::MatrixType::Lower : lapack::MatrixType::General,
+            tile_v.size().rows(), tile_v.size().cols(),
+            tile_v.ptr(), tile_v.ld(),
+            tile_w.ptr(), tile_w.ld());
+
+        if (is_diagonal_tile) { // is this the first one? (diagonal)
+          std::cout << "setting diagonal V on W" << std::endl;
+          // set upper part to zero and 1 on diagonal (reflectors)
+          lapack::laset(lapack::MatrixType::Upper,
+              tile_w.size().rows(), tile_w.size().cols(),
+              Type(0), Type(1),
+              tile_w.ptr(), tile_w.ld());
+        }
+
+        // W = V . T
+        blas::trmm(
+            blas::Layout::ColMajor, blas::Side::Right,
+            blas::Uplo::Upper, blas::Op::NoTrans, blas::Diag::NonUnit,
+            tile_w.size().rows(), tile_w.size().cols(),
+            Type(1),
+            tile_t.ptr(), tile_t.ld(),
+            tile_w.ptr(), tile_w.ld());
+      }
+    }
+
+    std::cout << "W" << std::endl;
+    print(W);
+
+    // TODO HEMM X = At . W
+
+    // TODO GEMM W2 = W* . X
+    // TODO GEMM X = X - 0.5 . V . W2
+    // TODO HER2K At = At - X . V* + V . X*
   }
 
   std::cout << 'A' << std::endl;
