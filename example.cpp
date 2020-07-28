@@ -55,17 +55,17 @@ int miniapp(hpx::program_options::variables_map& vm) {
     if (j_current_panel > 0)
       break;
 
-    std::cout << ">>> computing panel " << j_current_panel << std::endl;
+    const LocalTileIndex index_tile_x0{j_current_panel + 1, j_current_panel};
+    const LocalTileSize Ai_size{distribution.nrTiles().rows() - index_tile_x0.row(), 1};
 
-    const LocalTileIndex index_tile_x0{j_current_panel, j_current_panel};
-    const LocalTileSize size_current_panel{distribution.nrTiles().rows() - index_tile_x0.row(), 1};
+    std::cout << ">>> computing panel " << index_tile_x0 << " " << Ai_size << std::endl;
 
     MatrixType T(LocalElementSize{nb, nb}, distribution.blockSize());
 
     // for each column in the panel, compute reflector and update panel
     for (SizeType j_local_reflector = 0; j_local_reflector < nb; ++j_local_reflector) {
       // TODO fix check: is there a panel underneath to annihilate?
-      if (size_current_panel.rows() == 1 && j_local_reflector == nb - 1)
+      if (Ai_size.rows() == 1 && j_local_reflector == nb - 1)
         break;
 
       std::cout << ">>> computing local reflector " << j_local_reflector << std::endl;
@@ -76,7 +76,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
       Type x0;
       Type norm_x = 0;
       for (SizeType i = index_tile_x0.row(); i < distribution.nrTiles().rows(); ++i) {
-        const ConstTileType& tile_v = A.read(LocalTileIndex{i, index_tile_x0.row()}).get();
+        const ConstTileType& tile_v = A.read(LocalTileIndex{i, index_tile_x0.col()}).get();
 
         if (i == index_tile_x0.row())
           x0 = tile_v(index_el_x0);
@@ -127,7 +127,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
           // for each tile in the panel
           for (SizeType h = index_tile_x0.row(); h < distribution.nrTiles().rows(); ++h) {
-            const LocalTileIndex index_a{h, j_current_panel};
+            const LocalTileIndex index_a{h, index_tile_x0.col()};
             const ConstTileType& tile = A.read(index_a).get();
 
             // consider just the trailing panel
@@ -154,7 +154,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
           TileType w = W(LocalTileIndex{0, 0}).get();
 
           for (SizeType h = index_tile_x0.row(); h < distribution.nrTiles().rows(); ++h) {
-            TileType tile_a = A(LocalTileIndex{h, j_current_panel}).get();
+            TileType tile_a = A(LocalTileIndex{h, index_tile_x0.col()}).get();
 
             const SizeType first_element_in_tile = (h == index_tile_x0.row()) ? index_el_x0.row() : 0;
 
@@ -186,7 +186,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
       const TileElementIndex T_start{0, index_el_x0.col()};
       {
         TileType tile_t = T(LocalTileIndex{0, 0}).get();
-        for (const auto& index_v : iterate_range2d(index_tile_x0, size_current_panel)) {
+        for (const auto& index_v : iterate_range2d(index_tile_x0, Ai_size)) {
           std::cout << "* computing T " << index_v << std::endl;
 
           const SizeType first_element_in_tile = (index_v.row() == index_tile_x0.row()) ? index_el_x0.row() + 1 : 0;
@@ -280,6 +280,8 @@ int main(int argc, char** argv) {
 
   auto ret_code = hpx::init(miniapp, desc_commandline, argc, argv);
 
+  std::cout << "finished" << std::endl;
+
   return ret_code;
 }
 
@@ -297,7 +299,7 @@ void print(ConstMatrixType& matrix) {
 
     const auto& tile = matrix.read(tile_g).get();
 
-    std::cout << index_g << " " << index_e << " " << tile(index_e) << std::endl;
+    //std::cout << index_g << " " << index_e << " " << tile(index_e) << std::endl;
     ss << tile(index_e) << ", ";
   }
 
