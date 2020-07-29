@@ -320,10 +320,315 @@ int miniapp(hpx::program_options::variables_map& vm) {
     print(W);
 
     // TODO HEMM X = At . W
+    MatrixType X({At_size.rows() * nb, W.size().cols()}, distribution.blockSize());
+    dlaf::matrix::util::set(X, [](auto&&) { return 0; });
+
+    for (SizeType i_t = At_start.row(); i_t < distribution.nrTiles().rows(); ++i_t) {
+      for (SizeType j_t = At_start.col(); j_t <= i_t; ++j_t) {
+        const LocalTileIndex index_tile_at{i_t, j_t};
+
+        std::cout << "computing X " << index_tile_at << std::endl;
+
+        const ConstTileType& tile_a = A.read(index_tile_at).get();
+
+        const bool is_diagonal_tile = (i_t == j_t);
+
+        if (is_diagonal_tile) {
+          // HEMM
+          const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
+          const LocalTileIndex index_tile_w = index_tile_x;
+
+          std::cout << "HEMM " << index_tile_x << " " << index_tile_at << " " << index_tile_w << std::endl;
+
+          TileType tile_x = X(index_tile_x).get();
+          const ConstTileType& tile_w = W.read(index_tile_w).get();
+
+          blas::hemm(blas::Layout::ColMajor, blas::Side::Left, blas::Uplo::Lower,
+              tile_x.size().rows(), tile_a.size().cols(),
+              Type(1),
+              tile_a.ptr(), tile_a.ld(),
+              tile_w.ptr(), tile_w.ld(),
+              Type(1),
+              tile_x.ptr(), tile_x.ld());
+        }
+        else {
+          // A  . W
+          {
+            const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
+            const LocalTileIndex index_tile_w{index_tile_at.col() - At_start.col(), 0};
+
+            std::cout << "GEMM " << index_tile_x << " " << index_tile_at << " " << index_tile_w << std::endl;
+
+            TileType tile_x = X(index_tile_x).get();
+            const ConstTileType& tile_w = W.read(index_tile_w).get();
+
+            blas::gemm(blas::Layout::ColMajor, blas::Op::NoTrans, blas::Op::NoTrans,
+                tile_a.size().rows(), tile_w.size().cols(), tile_a.size().cols(),
+                Type(1),
+                tile_a.ptr(), tile_a.ld(),
+                tile_w.ptr(), tile_w.ld(),
+                Type(1),
+                tile_x.ptr(), tile_x.ld());
+          }
+
+          // A* . W
+          {
+            const LocalTileIndex index_tile_x{index_tile_at.col() - At_start.col(), 0};
+            const LocalTileIndex index_tile_w{index_tile_at.row() - At_start.row(), 0};
+
+            std::cout << "GEMM* " << index_tile_x << " " << index_tile_at << " " << index_tile_w << std::endl;
+
+            TileType tile_x = X(index_tile_x).get();
+            const ConstTileType& tile_w = W.read(index_tile_w).get();
+
+            blas::gemm(blas::Layout::ColMajor, blas::Op::ConjTrans, blas::Op::NoTrans,
+                tile_a.size().rows(), tile_w.size().cols(), tile_a.size().cols(),
+                Type(1),
+                tile_a.ptr(), tile_a.ld(),
+                tile_w.ptr(), tile_w.ld(),
+                Type(1),
+                tile_x.ptr(), tile_x.ld());
+          }
+        }
+      }
+    }
+
+    std::cout << "X" << std::endl;
+    print(X);
 
     // TODO GEMM W2 = W* . X
+    {
+      // re-use T as W2
+      TileType tile_w2 = T(LocalTileIndex{0, 0}).get();
+      for (const auto& index_tile : iterate_range2d(W.nrTiles())) {
+        const ConstTileType& tile_w = W.read(index_tile).get();
+        const ConstTileType& tile_x = X.read(index_tile).get();
+
+        const Type beta = (index_tile.row() == 0) ? 0 : 1;
+        blas::gemm(blas::Layout::ColMajor,
+            blas::Op::ConjTrans, blas::Op::NoTrans,
+            tile_w2.size().rows(), tile_w2.size().cols(), tile_w.size().cols(),
+            Type(1),
+            tile_w.ptr(), tile_w.ld(),
+            tile_x.ptr(), tile_x.ld(),
+            beta,
+            tile_w2.ptr(), tile_w2.ld());
+      }
+    }
+
+    std::cout << "W2" << std::endl;
+    print(T);
+
     // TODO GEMM X = X - 0.5 . V . W2
+    {
+      TileType tile_w2 = T(LocalTileIndex{0, 0}).get();
+
+      for (const auto& index_tile_x : iterate_range2d(W.nrTiles())) {
+        const LocalTileIndex index_tile_v{Ai_start.row() + index_tile_x.row(), Ai_start.col()};
+
+        std::cout << "UPDATING X" << index_tile_x << " V" << index_tile_v << std::endl;
+
+        hpx::shared_future<ConstTileType> fut_tile_v = A.read(index_tile_v);
+
+        const bool is_diagonal_tile = (Ai_start.row() == index_tile_v.row());
+        if (is_diagonal_tile) {
+          const ConstTileType& tile_v = fut_tile_v.get();
+
+          MemoryViewType mem_view(dlaf::util::size_t::mul(tile_v.size().rows(), tile_v.size().cols()));
+          TileType tile_tmp(tile_v.size(), std::move(mem_view), tile_v.size().rows());
+
+          std::cout << "diagonal: " << std::boolalpha << is_diagonal_tile << std::endl;
+          lapack::lacpy(
+              lapack::MatrixType::Lower,
+              tile_v.size().rows(), tile_v.size().cols(),
+              tile_v.ptr(), tile_v.ld(),
+              tile_tmp.ptr(), tile_tmp.ld());
+
+          // set upper part to zero and 1 on diagonal (reflectors)
+          lapack::laset(lapack::MatrixType::Upper,
+              tile_tmp.size().rows(), tile_tmp.size().cols(),
+              Type(0), Type(1),
+              tile_tmp.ptr(), tile_tmp.ld());
+
+          fut_tile_v = hpx::make_ready_future<ConstTileType>(std::move(tile_tmp));
+        }
+
+        TileType tile_x = X(index_tile_x).get();
+        const ConstTileType& tile_v = fut_tile_v.get();
+
+        blas::gemm(blas::Layout::ColMajor,
+            blas::Op::NoTrans, blas::Op::NoTrans,
+            tile_x.size().rows(), tile_x.size().cols(), tile_v.size().cols(),
+            Type(-0.5),
+            tile_v.ptr(), tile_v.ld(),
+            tile_w2.ptr(), tile_w2.ld(),
+            Type(1),
+            tile_x.ptr(), tile_x.ld());
+      }
+    }
+
+    std::cout << "X" << std::endl;
+    print(X);
+
     // TODO HER2K At = At - X . V* + V . X*
+    std::cout << "At" << At_start << " size:" << At_size << std::endl;
+    for (SizeType i = At_start.row(); i < A.nrTiles().cols(); ++i) {
+      for (SizeType j = At_start.col(); j <= i; ++j) {
+        const LocalTileIndex index_tile_at{i, j};
+        TileType tile_at = A(index_tile_at).get();
+        std::cout << "HER2K At" << index_tile_at << std::endl;
+
+        const bool is_diagonal_tile = (index_tile_at.row() == index_tile_at.col());
+
+        if (is_diagonal_tile) {
+          const LocalTileIndex index_tile_v{index_tile_at.row(), Ai_start.col()};
+          const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
+          hpx::shared_future<ConstTileType> fut_tile_v = A.read(index_tile_v);
+
+          const bool is_first_reflector_tile = (Ai_start.row() == index_tile_v.row());
+          if (is_first_reflector_tile) {
+            const ConstTileType& tile_v = fut_tile_v.get();
+
+            MemoryViewType mem_view(dlaf::util::size_t::mul(tile_v.size().rows(), tile_v.size().cols()));
+            TileType tile_tmp(tile_v.size(), std::move(mem_view), tile_v.size().rows());
+
+            std::cout << "first component: " << std::boolalpha << is_first_reflector_tile << std::endl;
+            lapack::lacpy(
+                lapack::MatrixType::Lower,
+                tile_v.size().rows(), tile_v.size().cols(),
+                tile_v.ptr(), tile_v.ld(),
+                tile_tmp.ptr(), tile_tmp.ld());
+
+            // set upper part to zero and 1 on diagonal (reflectors)
+            lapack::laset(lapack::MatrixType::Upper,
+                tile_tmp.size().rows(), tile_tmp.size().cols(),
+                Type(0), Type(1),
+                tile_tmp.ptr(), tile_tmp.ld());
+
+            fut_tile_v = hpx::make_ready_future<ConstTileType>(std::move(tile_tmp));
+          }
+
+          const ConstTileType& tile_v = fut_tile_v.get();
+          const ConstTileType& tile_x = X.read(index_tile_x).get();
+
+          std::cout << "her2k" << std::endl;
+          blas::her2k(
+              blas::Layout::ColMajor, blas::Uplo::Lower, blas::Op::NoTrans,
+              tile_at.size().rows(), tile_v.size().cols(),
+              Type(-1),
+              tile_v.ptr(), tile_v.ld(),
+              tile_x.ptr(), tile_x.ld(),
+              Type(1),
+              tile_at.ptr(), tile_at.ld());
+        }
+        else {
+          std::cout << "double gemm" << std::endl;
+
+          // GEMM A: X . V*
+          {
+            const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
+            const LocalTileIndex index_tile_v{index_tile_at.col(), Ai_start.col()};
+            hpx::shared_future<ConstTileType> fut_tile_v = A.read(index_tile_v);
+
+            const bool is_first_reflector_tile = (Ai_start.row() == index_tile_v.row());
+            if (is_first_reflector_tile) {
+              const ConstTileType& tile_v = fut_tile_v.get();
+
+              MemoryViewType mem_view(dlaf::util::size_t::mul(tile_v.size().rows(), tile_v.size().cols()));
+              TileType tile_tmp(tile_v.size(), std::move(mem_view), tile_v.size().rows());
+
+              std::cout << "first component: " << std::boolalpha << is_first_reflector_tile << std::endl;
+              lapack::lacpy(
+                  lapack::MatrixType::Lower,
+                  tile_v.size().rows(), tile_v.size().cols(),
+                  tile_v.ptr(), tile_v.ld(),
+                  tile_tmp.ptr(), tile_tmp.ld());
+
+              // set upper part to zero and 1 on diagonal (reflectors)
+              lapack::laset(lapack::MatrixType::Upper,
+                  tile_tmp.size().rows(), tile_tmp.size().cols(),
+                  Type(0), Type(1),
+                  tile_tmp.ptr(), tile_tmp.ld());
+
+              fut_tile_v = hpx::make_ready_future<ConstTileType>(std::move(tile_tmp));
+            }
+
+            const ConstTileType& tile_v = fut_tile_v.get();
+            const ConstTileType& tile_x = X.read(index_tile_x).get();
+
+            std::cout << "At" << std::endl;
+            print_tile(tile_at);
+            std::cout << "X" << std::endl;
+            print_tile(tile_x);
+            std::cout << "V" << std::endl;
+            print_tile(tile_v);
+
+            blas::gemm(
+                blas::Layout::ColMajor, blas::Op::NoTrans, blas::Op::ConjTrans,
+                tile_at.size().rows(), tile_at.size().cols(), tile_x.size().rows(),
+                Type(-1),
+                tile_x.ptr(), tile_x.ld(),
+                tile_v.ptr(), tile_v.ld(),
+                Type(1),
+                tile_at.ptr(), tile_at.ld());
+          }
+
+          std::cout << "At(updated-gemm1)" << std::endl;
+          print_tile(tile_at);
+
+          {
+            const LocalTileIndex index_tile_v{index_tile_at.row(), Ai_start.col()};
+            const LocalTileIndex index_tile_x{index_tile_at.col() - At_start.row(), 0};
+            hpx::shared_future<ConstTileType> fut_tile_v = A.read(index_tile_v);
+
+            const bool is_first_reflector_tile = (Ai_start.row() == index_tile_v.row());
+            if (is_first_reflector_tile) {
+              const ConstTileType& tile_v = fut_tile_v.get();
+
+              MemoryViewType mem_view(dlaf::util::size_t::mul(tile_v.size().rows(), tile_v.size().cols()));
+              TileType tile_tmp(tile_v.size(), std::move(mem_view), tile_v.size().rows());
+
+              std::cout << "first component: " << std::boolalpha << is_first_reflector_tile << std::endl;
+              lapack::lacpy(
+                  lapack::MatrixType::Lower,
+                  tile_v.size().rows(), tile_v.size().cols(),
+                  tile_v.ptr(), tile_v.ld(),
+                  tile_tmp.ptr(), tile_tmp.ld());
+
+              // set upper part to zero and 1 on diagonal (reflectors)
+              lapack::laset(lapack::MatrixType::Upper,
+                  tile_tmp.size().rows(), tile_tmp.size().cols(),
+                  Type(0), Type(1),
+                  tile_tmp.ptr(), tile_tmp.ld());
+
+              fut_tile_v = hpx::make_ready_future<ConstTileType>(std::move(tile_tmp));
+            }
+
+            const ConstTileType& tile_v = fut_tile_v.get();
+            const ConstTileType& tile_x = X.read(index_tile_x).get();
+
+            std::cout << "At" << std::endl;
+            print_tile(tile_at);
+            std::cout << "V" << std::endl;
+            print_tile(tile_v);
+            std::cout << "X" << std::endl;
+            print_tile(tile_x);
+
+            blas::gemm(
+                blas::Layout::ColMajor, blas::Op::NoTrans, blas::Op::ConjTrans,
+                tile_at.size().rows(), tile_at.size().cols(), tile_x.size().rows(),
+                Type(-1),
+                tile_v.ptr(), tile_v.ld(),
+                tile_x.ptr(), tile_x.ld(),
+                Type(1),
+                tile_at.ptr(), tile_at.ld());
+          }
+        }
+
+        std::cout << "At(updated)" << std::endl;
+        print_tile(tile_at);
+      }
+    }
   }
 
   std::cout << 'A' << std::endl;
