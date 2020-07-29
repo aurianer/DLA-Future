@@ -31,13 +31,13 @@ using MemoryViewType = dlaf::memory::MemoryView<Type, dlaf::Device::CPU>;
 
 void print(ConstMatrixType& matrix);
 void print_tile(const ConstTileType& tile);
+void setup_V(hpx::shared_future<ConstTileType>&);
 
 int miniapp(hpx::program_options::variables_map& vm) {
-  const SizeType m = vm["matrix-rows"].as<SizeType>();
-  const SizeType n = vm["matrix-cols"].as<SizeType>();
+  const SizeType n = vm["matrix-rows"].as<SizeType>();
   const SizeType nb = vm["block-size"].as<SizeType>();
 
-  LocalElementSize matrix_size(m, n);
+  LocalElementSize matrix_size(n, n);
   TileElementSize block_size(nb, nb);
 
   MatrixType A{matrix_size, block_size};
@@ -45,8 +45,9 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
   const auto& distribution = A.distribution();
 
-  std::cout << 'A' << std::endl;
+  std::cout << "A = ";
   print(A);
+
   std::cout << A << std::endl;
   std::cout << A.distribution().localNrTiles() << std::endl;
 
@@ -54,22 +55,24 @@ int miniapp(hpx::program_options::variables_map& vm) {
   using hpx::util::unwrapping;
 
   // for each panel
-  for (SizeType j_current_panel = 0; j_current_panel < distribution.nrTiles().cols() &&
-                                     (j_current_panel + 1) < distribution.nrTiles().rows();
-       ++j_current_panel) {
+  const LocalTileSize A_size = distribution.localNrTiles();
+  for (SizeType j_panel = 0; j_panel < A_size.cols() && (j_panel + 1) < A_size.rows(); ++j_panel) {
 
-    //if (j_current_panel > 0) break;
+    //if (j_panel > 0)
+    //  break;
 
-    const LocalTileIndex Ai_start{j_current_panel + 1, j_current_panel};
+    const LocalTileIndex Ai_start{j_panel + 1, j_panel};
     const LocalTileSize Ai_size{distribution.nrTiles().rows() - Ai_start.row(), 1};
 
     const LocalTileIndex At_start{Ai_start.row(), Ai_start.col() + 1};
     const LocalTileSize At_size{Ai_size.rows(), A.nrTiles().cols() - (Ai_start.col() + 1)};
 
-    std::cout << std::endl << ">>> computing panel" << std::endl;
+    std::cout << std::endl;
+    std::cout << ">>> COMPUTING panel" << std::endl;
     std::cout << ">>> Ai " << A.read(Ai_start).get()({0, 0}) << " " << Ai_size << " " << Ai_start << std::endl;
 
     MatrixType T(LocalElementSize{nb, nb}, distribution.blockSize());
+    dlaf::matrix::util::set(T, [](auto&&) { return 0; });
 
     // for each column in the panel, compute reflector and update panel
     for (SizeType j_local_reflector = 0; j_local_reflector < nb; ++j_local_reflector) {
@@ -77,11 +80,12 @@ int miniapp(hpx::program_options::variables_map& vm) {
       if (Ai_size.rows() == 1 && j_local_reflector == nb - 1)
         break;
 
-      std::cout << ">>> computing local reflector " << j_local_reflector << std::endl;
+      std::cout << ">>> COMPUTING local reflector " << j_local_reflector << std::endl;
 
       const TileElementIndex index_el_x0{j_local_reflector, j_local_reflector};
 
       // compute norm + identify x0 component
+      std::cout << "COMPUTING NORM" << std::endl;
       Type x0;
       Type norm_x = 0;
       for (SizeType i = Ai_start.row(); i < distribution.nrTiles().rows(); ++i) {
@@ -112,6 +116,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
       const Type tau = (y - x0) / y;
       std::cout << "t" << j_local_reflector << " = " << tau << std::endl;
 
+      std::cout << "COMPUTING REFLECTOR COMPONENT" << std::endl;
       // compute V (reflector components)
       for (SizeType i = Ai_start.row(); i < distribution.nrTiles().rows(); ++i) {
         TileType tile_v = A(LocalTileIndex{i, Ai_start.col()}).get();
@@ -155,7 +160,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
                        tile.ptr(A_start), tile.ld(), tile.ptr(V_start), 1, beta, w.ptr(W_start), w.ld());
           }
         }
-        std::cout << "W" << std::endl;
+        std::cout << "W = ";
         print(W);
 
         // update trailing panel
@@ -186,7 +191,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
       // put in place the previously computed result
       A(Ai_start).get()({j_local_reflector, j_local_reflector}) = y;
 
-      std::cout << 'A' << std::endl;
+      std::cout << "A = ";
       print(A);
 
       // TODO compute T-factor component for this reflector
@@ -196,7 +201,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
       {
         TileType tile_t = T(LocalTileIndex{0, 0}).get();
         for (const auto& index_v : iterate_range2d(Ai_start, Ai_size)) {
-          std::cout << "* computing T " << index_v << std::endl;
+          std::cout << "* COMPUTING T " << index_v << std::endl;
 
           const SizeType first_element_in_tile =
               (index_v.row() == Ai_start.row()) ? index_el_x0.row() + 1 : 0;
@@ -261,15 +266,16 @@ int miniapp(hpx::program_options::variables_map& vm) {
           std::cout << "t[" << i_loc << "] " << tile_t({i_loc, j_local_reflector}) << std::endl;
       }
 
-      std::cout << "T(partial)" << std::endl;
-      print(T);
+      //std::cout << "T(partial) = ";
+      //print(T);
     }
 
-    std::cout << "T" << std::endl;
+    std::cout << "T = ";
     print(T);
 
-    // TODO update trailing matrix
-    std::cout << ">>> update trailing matrix" << std::endl;
+    // ***************************
+    // TODO UPDATE TRAILING MATRIX
+    std::cout << ">>> UPDATE TRAILING MATRIX" << std::endl;
     std::cout << ">>> At " << A.read(At_start).get()({0, 0}) << " " << At_size << " " << At_start << std::endl;
 
     MatrixType W({Ai_size.rows() * nb, nb}, distribution.blockSize());
@@ -277,10 +283,10 @@ int miniapp(hpx::program_options::variables_map& vm) {
       const ConstTileType& tile_t = T.read(LocalTileIndex{0, 0}).get();
 
       for (SizeType i_t = At_start.row(); i_t < distribution.nrTiles().rows(); ++i_t) {
-        const LocalTileIndex index_tile_v{i_t, j_current_panel};
+        const LocalTileIndex index_tile_v{i_t, j_panel};
         const LocalTileIndex index_tile_w{i_t - At_start.row(), 0};
 
-        std::cout << "computing W" << index_tile_w << " with V " << index_tile_v << std::endl;
+        std::cout << "COMPUTING W" << index_tile_w << " with V " << index_tile_v << std::endl;
 
         // TODO TRMM W = V . T
         TileType tile_w = W(index_tile_w).get();
@@ -297,7 +303,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
             tile_w.ptr(), tile_w.ld());
 
         if (is_diagonal_tile) { // is this the first one? (diagonal)
-          std::cout << "setting diagonal V on W" << std::endl;
+          std::cout << "setting V on W" << std::endl;
           // set upper part to zero and 1 on diagonal (reflectors)
           lapack::laset(lapack::MatrixType::Upper,
               tile_w.size().rows(), tile_w.size().cols(),
@@ -316,7 +322,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
       }
     }
 
-    std::cout << "W" << std::endl;
+    std::cout << "W = ";
     print(W);
 
     // TODO HEMM X = At . W
@@ -327,7 +333,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
       for (SizeType j_t = At_start.col(); j_t <= i_t; ++j_t) {
         const LocalTileIndex index_tile_at{i_t, j_t};
 
-        std::cout << "computing X " << index_tile_at << std::endl;
+        std::cout << "COMPUTING X " << index_tile_at << std::endl;
 
         const ConstTileType& tile_a = A.read(index_tile_at).get();
 
@@ -357,7 +363,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
             const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
             const LocalTileIndex index_tile_w{index_tile_at.col() - At_start.col(), 0};
 
-            std::cout << "GEMM " << index_tile_x << " " << index_tile_at << " " << index_tile_w << std::endl;
+            std::cout << "GEMM(1) " << index_tile_x << " " << index_tile_at << " " << index_tile_w << std::endl;
 
             TileType tile_x = X(index_tile_x).get();
             const ConstTileType& tile_w = W.read(index_tile_w).get();
@@ -376,7 +382,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
             const LocalTileIndex index_tile_x{index_tile_at.col() - At_start.col(), 0};
             const LocalTileIndex index_tile_w{index_tile_at.row() - At_start.row(), 0};
 
-            std::cout << "GEMM* " << index_tile_x << " " << index_tile_at << " " << index_tile_w << std::endl;
+            std::cout << "GEMM(2) " << index_tile_x << " " << index_tile_at << " " << index_tile_w << std::endl;
 
             TileType tile_x = X(index_tile_x).get();
             const ConstTileType& tile_w = W.read(index_tile_w).get();
@@ -393,7 +399,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
       }
     }
 
-    std::cout << "X" << std::endl;
+    std::cout << "X = ";
     print(X);
 
     // TODO GEMM W2 = W* . X
@@ -416,7 +422,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
       }
     }
 
-    std::cout << "W2" << std::endl;
+    std::cout << "W2 = ";
     print(T);
 
     // TODO GEMM X = X - 0.5 . V . W2
@@ -431,27 +437,8 @@ int miniapp(hpx::program_options::variables_map& vm) {
         hpx::shared_future<ConstTileType> fut_tile_v = A.read(index_tile_v);
 
         const bool is_diagonal_tile = (Ai_start.row() == index_tile_v.row());
-        if (is_diagonal_tile) {
-          const ConstTileType& tile_v = fut_tile_v.get();
-
-          MemoryViewType mem_view(dlaf::util::size_t::mul(tile_v.size().rows(), tile_v.size().cols()));
-          TileType tile_tmp(tile_v.size(), std::move(mem_view), tile_v.size().rows());
-
-          std::cout << "diagonal: " << std::boolalpha << is_diagonal_tile << std::endl;
-          lapack::lacpy(
-              lapack::MatrixType::Lower,
-              tile_v.size().rows(), tile_v.size().cols(),
-              tile_v.ptr(), tile_v.ld(),
-              tile_tmp.ptr(), tile_tmp.ld());
-
-          // set upper part to zero and 1 on diagonal (reflectors)
-          lapack::laset(lapack::MatrixType::Upper,
-              tile_tmp.size().rows(), tile_tmp.size().cols(),
-              Type(0), Type(1),
-              tile_tmp.ptr(), tile_tmp.ld());
-
-          fut_tile_v = hpx::make_ready_future<ConstTileType>(std::move(tile_tmp));
-        }
+        if (is_diagonal_tile)
+          setup_V(fut_tile_v);
 
         TileType tile_x = X(index_tile_x).get();
         const ConstTileType& tile_v = fut_tile_v.get();
@@ -467,7 +454,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
       }
     }
 
-    std::cout << "X" << std::endl;
+    std::cout << "X = ";
     print(X);
 
     // TODO HER2K At = At - X . V* + V . X*
@@ -486,27 +473,8 @@ int miniapp(hpx::program_options::variables_map& vm) {
           hpx::shared_future<ConstTileType> fut_tile_v = A.read(index_tile_v);
 
           const bool is_first_reflector_tile = (Ai_start.row() == index_tile_v.row());
-          if (is_first_reflector_tile) {
-            const ConstTileType& tile_v = fut_tile_v.get();
-
-            MemoryViewType mem_view(dlaf::util::size_t::mul(tile_v.size().rows(), tile_v.size().cols()));
-            TileType tile_tmp(tile_v.size(), std::move(mem_view), tile_v.size().rows());
-
-            std::cout << "first component: " << std::boolalpha << is_first_reflector_tile << std::endl;
-            lapack::lacpy(
-                lapack::MatrixType::Lower,
-                tile_v.size().rows(), tile_v.size().cols(),
-                tile_v.ptr(), tile_v.ld(),
-                tile_tmp.ptr(), tile_tmp.ld());
-
-            // set upper part to zero and 1 on diagonal (reflectors)
-            lapack::laset(lapack::MatrixType::Upper,
-                tile_tmp.size().rows(), tile_tmp.size().cols(),
-                Type(0), Type(1),
-                tile_tmp.ptr(), tile_tmp.ld());
-
-            fut_tile_v = hpx::make_ready_future<ConstTileType>(std::move(tile_tmp));
-          }
+          if (is_first_reflector_tile)
+            setup_V(fut_tile_v);
 
           const ConstTileType& tile_v = fut_tile_v.get();
           const ConstTileType& tile_x = X.read(index_tile_x).get();
@@ -531,37 +499,11 @@ int miniapp(hpx::program_options::variables_map& vm) {
             hpx::shared_future<ConstTileType> fut_tile_v = A.read(index_tile_v);
 
             const bool is_first_reflector_tile = (Ai_start.row() == index_tile_v.row());
-            if (is_first_reflector_tile) {
-              const ConstTileType& tile_v = fut_tile_v.get();
-
-              MemoryViewType mem_view(dlaf::util::size_t::mul(tile_v.size().rows(), tile_v.size().cols()));
-              TileType tile_tmp(tile_v.size(), std::move(mem_view), tile_v.size().rows());
-
-              std::cout << "first component: " << std::boolalpha << is_first_reflector_tile << std::endl;
-              lapack::lacpy(
-                  lapack::MatrixType::Lower,
-                  tile_v.size().rows(), tile_v.size().cols(),
-                  tile_v.ptr(), tile_v.ld(),
-                  tile_tmp.ptr(), tile_tmp.ld());
-
-              // set upper part to zero and 1 on diagonal (reflectors)
-              lapack::laset(lapack::MatrixType::Upper,
-                  tile_tmp.size().rows(), tile_tmp.size().cols(),
-                  Type(0), Type(1),
-                  tile_tmp.ptr(), tile_tmp.ld());
-
-              fut_tile_v = hpx::make_ready_future<ConstTileType>(std::move(tile_tmp));
-            }
+            if (is_first_reflector_tile)
+              setup_V(fut_tile_v);
 
             const ConstTileType& tile_v = fut_tile_v.get();
             const ConstTileType& tile_x = X.read(index_tile_x).get();
-
-            std::cout << "At" << std::endl;
-            print_tile(tile_at);
-            std::cout << "X" << std::endl;
-            print_tile(tile_x);
-            std::cout << "V" << std::endl;
-            print_tile(tile_v);
 
             blas::gemm(
                 blas::Layout::ColMajor, blas::Op::NoTrans, blas::Op::ConjTrans,
@@ -573,46 +515,17 @@ int miniapp(hpx::program_options::variables_map& vm) {
                 tile_at.ptr(), tile_at.ld());
           }
 
-          std::cout << "At(updated-gemm1)" << std::endl;
-          print_tile(tile_at);
-
           {
             const LocalTileIndex index_tile_v{index_tile_at.row(), Ai_start.col()};
             const LocalTileIndex index_tile_x{index_tile_at.col() - At_start.row(), 0};
             hpx::shared_future<ConstTileType> fut_tile_v = A.read(index_tile_v);
 
             const bool is_first_reflector_tile = (Ai_start.row() == index_tile_v.row());
-            if (is_first_reflector_tile) {
-              const ConstTileType& tile_v = fut_tile_v.get();
-
-              MemoryViewType mem_view(dlaf::util::size_t::mul(tile_v.size().rows(), tile_v.size().cols()));
-              TileType tile_tmp(tile_v.size(), std::move(mem_view), tile_v.size().rows());
-
-              std::cout << "first component: " << std::boolalpha << is_first_reflector_tile << std::endl;
-              lapack::lacpy(
-                  lapack::MatrixType::Lower,
-                  tile_v.size().rows(), tile_v.size().cols(),
-                  tile_v.ptr(), tile_v.ld(),
-                  tile_tmp.ptr(), tile_tmp.ld());
-
-              // set upper part to zero and 1 on diagonal (reflectors)
-              lapack::laset(lapack::MatrixType::Upper,
-                  tile_tmp.size().rows(), tile_tmp.size().cols(),
-                  Type(0), Type(1),
-                  tile_tmp.ptr(), tile_tmp.ld());
-
-              fut_tile_v = hpx::make_ready_future<ConstTileType>(std::move(tile_tmp));
-            }
+            if (is_first_reflector_tile)
+              setup_V(fut_tile_v);
 
             const ConstTileType& tile_v = fut_tile_v.get();
             const ConstTileType& tile_x = X.read(index_tile_x).get();
-
-            std::cout << "At" << std::endl;
-            print_tile(tile_at);
-            std::cout << "V" << std::endl;
-            print_tile(tile_v);
-            std::cout << "X" << std::endl;
-            print_tile(tile_x);
 
             blas::gemm(
                 blas::Layout::ColMajor, blas::Op::NoTrans, blas::Op::ConjTrans,
@@ -624,14 +537,11 @@ int miniapp(hpx::program_options::variables_map& vm) {
                 tile_at.ptr(), tile_at.ld());
           }
         }
-
-        std::cout << "At(updated)" << std::endl;
-        print_tile(tile_at);
       }
     }
   }
 
-  std::cout << 'A' << std::endl;
+  std::cout << "A = ";
   print(A);
 
   return hpx::finalize();
@@ -646,7 +556,6 @@ int main(int argc, char** argv) {
   // clang-format off
   desc_commandline.add_options()
     ("matrix-rows", value<SizeType>()->default_value(4), "Matrix rows")
-    ("matrix-cols", value<SizeType>()->default_value(4), "Matrix cols")
     ("block-size",  value<SizeType>()->default_value(2), "Block cyclic distribution size");
   // clang-format on
 
@@ -689,4 +598,25 @@ void print_tile(const ConstTileType& tile) {
       std::cout << tile({i_loc, j_loc}) << ", ";
     std::cout << std::endl;
   }
+}
+
+void setup_V(hpx::shared_future<ConstTileType>& fut_tile_v) {
+  const ConstTileType& tile_v = fut_tile_v.get();
+
+  MemoryViewType mem_view(dlaf::util::size_t::mul(tile_v.size().rows(), tile_v.size().cols()));
+  TileType tile_tmp(tile_v.size(), std::move(mem_view), tile_v.size().rows());
+
+  lapack::lacpy(
+      lapack::MatrixType::Lower,
+      tile_v.size().rows(), tile_v.size().cols(),
+      tile_v.ptr(), tile_v.ld(),
+      tile_tmp.ptr(), tile_tmp.ld());
+
+  // set upper part to zero and 1 on diagonal (reflectors)
+  lapack::laset(lapack::MatrixType::Upper,
+      tile_tmp.size().rows(), tile_tmp.size().cols(),
+      Type(0), Type(1),
+      tile_tmp.ptr(), tile_tmp.ld());
+
+  fut_tile_v = hpx::make_ready_future<ConstTileType>(std::move(tile_tmp));
 }
