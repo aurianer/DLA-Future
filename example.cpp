@@ -196,12 +196,12 @@ int miniapp(hpx::program_options::variables_map& vm) {
             // Pt = Pt - tau * v * w*
             const Type alpha = -tau;
             // clang-format off
-              blas::ger(blas::Layout::ColMajor,
-                  A_size.rows(), A_size.cols(),
-                  alpha,
-                  tile_a.ptr(V_start), 1,
-                  w.ptr(W_start), w.ld(),
-                  tile_a.ptr(A_start), tile_a.ld());
+            blas::ger(blas::Layout::ColMajor,
+                A_size.rows(), A_size.cols(),
+                alpha,
+                tile_a.ptr(V_start), 1,
+                w.ptr(W_start), w.ld(),
+                tile_a.ptr(A_start), tile_a.ld());
             // clang-format on
           });
 
@@ -258,13 +258,13 @@ int miniapp(hpx::program_options::variables_map& vm) {
             const Type alpha = -tau;
             const Type beta = 1;
             // clang-format off
-              blas::gemv(blas::Layout::ColMajor,
-                  blas::Op::ConjTrans,
-                  V_size.rows(), V_size.cols(),
-                  alpha,
-                  tile_v.ptr(Va_start), tile_v.ld(),
-                  tile_v.ptr(Vb_start), 1,
-                  beta, tile_t.ptr(T_start), 1);
+            blas::gemv(blas::Layout::ColMajor,
+                blas::Op::ConjTrans,
+                V_size.rows(), V_size.cols(),
+                alpha,
+                tile_v.ptr(Va_start), tile_v.ld(),
+                tile_v.ptr(Vb_start), 1,
+                beta, tile_t.ptr(T_start), 1);
             // clang-format on
 
             for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
@@ -284,11 +284,11 @@ int miniapp(hpx::program_options::variables_map& vm) {
       auto trmv_func = unwrapping([T_start, index_el_x0](auto&& tile_t) {
         // t = T . t
         // clang-format off
-          blas::trmv(blas::Layout::ColMajor,
-              blas::Uplo::Upper, blas::Op::NoTrans, blas::Diag::NonUnit,
-              index_el_x0.row(),
-              tile_t.ptr(), tile_t.ld(),
-              tile_t.ptr(T_start), 1);
+        blas::trmv(blas::Layout::ColMajor,
+            blas::Uplo::Upper, blas::Op::NoTrans, blas::Diag::NonUnit,
+            index_el_x0.row(),
+            tile_t.ptr(), tile_t.ld(),
+            tile_t.ptr(T_start), 1);
         // clang-format on
       });
 
@@ -320,14 +320,14 @@ int miniapp(hpx::program_options::variables_map& vm) {
       const bool is_diagonal_tile = index_tile_v.row() == At_start.row();
 
       auto copy_v_func = unwrapping([is_diagonal_tile](auto&& tile_w, auto&& tile_v) {
-          // clang-format off
-          lapack::lacpy(is_diagonal_tile ? lapack::MatrixType::Lower : lapack::MatrixType::General,
-              tile_v.size().rows(), tile_v.size().cols(),
-              tile_v.ptr(), tile_v.ld(),
-              tile_w.ptr(), tile_w.ld());
-          // clang-format on
+        // clang-format off
+        lapack::lacpy(is_diagonal_tile ? lapack::MatrixType::Lower : lapack::MatrixType::General,
+            tile_v.size().rows(), tile_v.size().cols(),
+            tile_v.ptr(), tile_v.ld(),
+            tile_w.ptr(), tile_w.ld());
+        // clang-format on
 
-          if (is_diagonal_tile) {  // is this the first one? (diagonal)
+        if (is_diagonal_tile) {  // is this the first one? (diagonal)
           std::cout << "setting V on W" << std::endl;
           // set upper part to zero and 1 on diagonal (reflectors)
           // clang-format off
@@ -337,20 +337,20 @@ int miniapp(hpx::program_options::variables_map& vm) {
               Type(1), // on  diag
               tile_w.ptr(), tile_w.ld());
           // clang-format on
-          }
-          });
+        }
+      });
 
       auto trmm_func = unwrapping([](auto&& tile_t, auto&& tile_w) {
-          // W = V . T
-          // clang-format off
-          blas::trmm(blas::Layout::ColMajor,
-              blas::Side::Right, blas::Uplo::Upper, blas::Op::NoTrans, blas::Diag::NonUnit,
-              tile_w.size().rows(), tile_w.size().cols(),
-              Type(1),
-              tile_t.ptr(), tile_t.ld(),
-              tile_w.ptr(), tile_w.ld());
-          // clang-format on
-          });
+        // W = V . T
+        // clang-format off
+        blas::trmm(blas::Layout::ColMajor,
+            blas::Side::Right, blas::Uplo::Upper, blas::Op::NoTrans, blas::Diag::NonUnit,
+            tile_w.size().rows(), tile_w.size().cols(),
+            Type(1),
+            tile_t.ptr(), tile_t.ld(),
+            tile_w.ptr(), tile_w.ld());
+        // clang-format on
+      });
 
       hpx::dataflow(copy_v_func, W(index_tile_w), A.read(index_tile_v));
       hpx::dataflow(trmm_func, T.read(LocalTileIndex{0, 0}), W(index_tile_w));
@@ -377,16 +377,16 @@ int miniapp(hpx::program_options::variables_map& vm) {
           const LocalTileIndex index_tile_w = index_tile_x;
 
           auto hemm_func = unwrapping([](auto&& tile_a, auto&& tile_w, auto&& tile_x) {
-              // clang-format off
-              blas::hemm(blas::Layout::ColMajor,
-                  blas::Side::Left, blas::Uplo::Lower,
-                  tile_x.size().rows(), tile_a.size().cols(),
-                  Type(1),
-                  tile_a.ptr(), tile_a.ld(),
-                  tile_w.ptr(), tile_w.ld(),
-                  Type(1),
-                  tile_x.ptr(), tile_x.ld());
-              // clang-format on
+            // clang-format off
+            blas::hemm(blas::Layout::ColMajor,
+                blas::Side::Left, blas::Uplo::Lower,
+                tile_x.size().rows(), tile_a.size().cols(),
+                Type(1),
+                tile_a.ptr(), tile_a.ld(),
+                tile_w.ptr(), tile_w.ld(),
+                Type(1),
+                tile_x.ptr(), tile_x.ld());
+            // clang-format on
           });
 
           hpx::dataflow(hemm_func, A.read(index_tile_at), W.read(index_tile_w), X(index_tile_x));
@@ -401,16 +401,16 @@ int miniapp(hpx::program_options::variables_map& vm) {
                       << std::endl;
 
             auto gemm_a_func = unwrapping([](auto&& tile_a, auto&& tile_w, auto&& tile_x) {
-                // clang-format off
-                blas::gemm(blas::Layout::ColMajor,
-                    blas::Op::NoTrans, blas::Op::NoTrans,
-                    tile_a.size().rows(), tile_w.size().cols(), tile_a.size().cols(),
-                    Type(1),
-                    tile_a.ptr(), tile_a.ld(),
-                    tile_w.ptr(), tile_w.ld(),
-                    Type(1),
-                    tile_x.ptr(), tile_x.ld());
-                // clang-format on
+              // clang-format off
+              blas::gemm(blas::Layout::ColMajor,
+                  blas::Op::NoTrans, blas::Op::NoTrans,
+                  tile_a.size().rows(), tile_w.size().cols(), tile_a.size().cols(),
+                  Type(1),
+                  tile_a.ptr(), tile_a.ld(),
+                  tile_w.ptr(), tile_w.ld(),
+                  Type(1),
+                  tile_x.ptr(), tile_x.ld());
+              // clang-format on
             });
 
             hpx::dataflow(gemm_a_func, A.read(index_tile_at), W.read(index_tile_w), X(index_tile_x));
@@ -425,16 +425,16 @@ int miniapp(hpx::program_options::variables_map& vm) {
                       << std::endl;
 
             auto gemm_b_func = unwrapping([](auto&& tile_a, auto&& tile_w, auto&& tile_x) {
-                // clang-format off
-                blas::gemm(blas::Layout::ColMajor,
-                    blas::Op::ConjTrans, blas::Op::NoTrans,
-                    tile_a.size().rows(), tile_w.size().cols(), tile_a.size().cols(),
-                    Type(1),
-                    tile_a.ptr(), tile_a.ld(),
-                    tile_w.ptr(), tile_w.ld(),
-                    Type(1),
-                    tile_x.ptr(), tile_x.ld());
-                // clang-format on
+              // clang-format off
+              blas::gemm(blas::Layout::ColMajor,
+                  blas::Op::ConjTrans, blas::Op::NoTrans,
+                  tile_a.size().rows(), tile_w.size().cols(), tile_a.size().cols(),
+                  Type(1),
+                  tile_a.ptr(), tile_a.ld(),
+                  tile_w.ptr(), tile_w.ld(),
+                  Type(1),
+                  tile_x.ptr(), tile_x.ld());
+              // clang-format on
             });
 
             hpx::dataflow(gemm_b_func, A.read(index_tile_at), W.read(index_tile_w), X(index_tile_x));
@@ -450,17 +450,17 @@ int miniapp(hpx::program_options::variables_map& vm) {
     for (const auto& index_tile : iterate_range2d(W.nrTiles())) {
       const Type beta = (index_tile.row() == 0) ? 0 : 1;
       auto gemm_func = unwrapping([beta](auto&& tile_w, auto&& tile_x, auto&& tile_w2) {
-          // clang-format off
-          blas::gemm(blas::Layout::ColMajor,
-              blas::Op::ConjTrans, blas::Op::NoTrans,
-              tile_w2.size().rows(), tile_w2.size().cols(), tile_w.size().cols(),
-              Type(1),
-              tile_w.ptr(), tile_w.ld(),
-              tile_x.ptr(), tile_x.ld(),
-              beta,
-              tile_w2.ptr(), tile_w2.ld());
-          // clang-format on
-          });
+        // clang-format off
+        blas::gemm(blas::Layout::ColMajor,
+            blas::Op::ConjTrans, blas::Op::NoTrans,
+            tile_w2.size().rows(), tile_w2.size().cols(), tile_w.size().cols(),
+            Type(1),
+            tile_w.ptr(), tile_w.ld(),
+            tile_x.ptr(), tile_x.ld(),
+            beta,
+            tile_w2.ptr(), tile_w2.ld());
+        // clang-format on
+      });
 
       // re-use T as W2
       hpx::dataflow(gemm_func, W.read(index_tile), X.read(index_tile), T(LocalTileIndex{0, 0}));
@@ -482,17 +482,17 @@ int miniapp(hpx::program_options::variables_map& vm) {
         setup_V(fut_tile_v);
 
       auto gemm_func = unwrapping([](auto&& tile_v, auto&& tile_w2, auto&& tile_x) {
-          // clang-format off
-          blas::gemm(blas::Layout::ColMajor,
-              blas::Op::NoTrans, blas::Op::NoTrans,
-              tile_x.size().rows(), tile_x.size().cols(), tile_v.size().cols(),
-              Type(-0.5),
-              tile_v.ptr(), tile_v.ld(),
-              tile_w2.ptr(), tile_w2.ld(),
-              Type(1),
-              tile_x.ptr(), tile_x.ld());
-          // clang-format on
-          });
+        // clang-format off
+        blas::gemm(blas::Layout::ColMajor,
+            blas::Op::NoTrans, blas::Op::NoTrans,
+            tile_x.size().rows(), tile_x.size().cols(), tile_v.size().cols(),
+            Type(-0.5),
+            tile_v.ptr(), tile_v.ld(),
+            tile_w2.ptr(), tile_w2.ld(),
+            Type(1),
+            tile_x.ptr(), tile_x.ld());
+        // clang-format on
+      });
 
       // W2 is stored in T
       hpx::dataflow(gemm_func, fut_tile_v, T(LocalTileIndex{0, 0}), X(index_tile_x));
@@ -522,16 +522,16 @@ int miniapp(hpx::program_options::variables_map& vm) {
             setup_V(fut_tile_v);
 
           auto her2k_func = unwrapping([](auto&& tile_v, auto&& tile_x, auto&& tile_at) {
-              // clang-format off
-              blas::her2k(blas::Layout::ColMajor,
-                  blas::Uplo::Lower, blas::Op::NoTrans,
-                  tile_at.size().rows(), tile_v.size().cols(),
-                  Type(-1),
-                  tile_v.ptr(), tile_v.ld(),
-                  tile_x.ptr(), tile_x.ld(),
-                  Type(1),
-                  tile_at.ptr(), tile_at.ld());
-              // clang-format on
+            // clang-format off
+            blas::her2k(blas::Layout::ColMajor,
+                blas::Uplo::Lower, blas::Op::NoTrans,
+                tile_at.size().rows(), tile_v.size().cols(),
+                Type(-1),
+                tile_v.ptr(), tile_v.ld(),
+                tile_x.ptr(), tile_x.ld(),
+                Type(1),
+                tile_at.ptr(), tile_at.ld());
+            // clang-format on
           });
 
           hpx::dataflow(her2k_func, fut_tile_v, X.read(index_tile_x), A(index_tile_at));
@@ -550,16 +550,16 @@ int miniapp(hpx::program_options::variables_map& vm) {
               setup_V(fut_tile_v);
 
             auto gemm_a_func = unwrapping([](auto&& tile_x, auto&& tile_v, auto&& tile_at) {
-            // clang-format off
-            blas::gemm(blas::Layout::ColMajor,
-                blas::Op::NoTrans, blas::Op::ConjTrans,
-                tile_at.size().rows(), tile_at.size().cols(), tile_x.size().rows(),
-                Type(-1),
-                tile_x.ptr(), tile_x.ld(),
-                tile_v.ptr(), tile_v.ld(),
-                Type(1),
-                tile_at.ptr(), tile_at.ld());
-            // clang-format on
+              // clang-format off
+              blas::gemm(blas::Layout::ColMajor,
+                  blas::Op::NoTrans, blas::Op::ConjTrans,
+                  tile_at.size().rows(), tile_at.size().cols(), tile_x.size().rows(),
+                  Type(-1),
+                  tile_x.ptr(), tile_x.ld(),
+                  tile_v.ptr(), tile_v.ld(),
+                  Type(1),
+                  tile_at.ptr(), tile_at.ld());
+              // clang-format on
             });
 
             hpx::dataflow(gemm_a_func, X.read(index_tile_x), fut_tile_v, A(index_tile_at));
@@ -575,17 +575,17 @@ int miniapp(hpx::program_options::variables_map& vm) {
             if (is_first_reflector_tile)
               setup_V(fut_tile_v);
 
-            auto gemm_b_func = unwrapping([](auto&& tile_v, auto&& tile_x, auto&&tile_at) {
-                // clang-format off
-                blas::gemm(blas::Layout::ColMajor,
-                    blas::Op::NoTrans, blas::Op::ConjTrans,
-                    tile_at.size().rows(), tile_at.size().cols(), tile_x.size().rows(),
-                    Type(-1),
-                    tile_v.ptr(), tile_v.ld(),
-                    tile_x.ptr(), tile_x.ld(),
-                    Type(1),
-                    tile_at.ptr(), tile_at.ld());
-                // clang-format on
+            auto gemm_b_func = unwrapping([](auto&& tile_v, auto&& tile_x, auto&& tile_at) {
+              // clang-format off
+              blas::gemm(blas::Layout::ColMajor,
+                  blas::Op::NoTrans, blas::Op::ConjTrans,
+                  tile_at.size().rows(), tile_at.size().cols(), tile_x.size().rows(),
+                  Type(-1),
+                  tile_v.ptr(), tile_v.ld(),
+                  tile_x.ptr(), tile_x.ld(),
+                  Type(1),
+                  tile_at.ptr(), tile_at.ld());
+              // clang-format on
             });
 
             hpx::dataflow(gemm_b_func, fut_tile_v, X.read(index_tile_x), A(index_tile_at));
