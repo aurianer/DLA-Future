@@ -31,7 +31,29 @@ using MemoryViewType = dlaf::memory::MemoryView<Type, dlaf::Device::CPU>;
 
 void print(ConstMatrixType& matrix);
 void print_tile(const ConstTileType& tile);
-void setup_V(hpx::shared_future<ConstTileType>&);
+
+auto setup_v_func = hpx::util::unwrapping([](const ConstTileType& tile_v) -> ConstTileType {
+  MemoryViewType mem_view(dlaf::util::size_t::mul(tile_v.size().rows(), tile_v.size().cols()));
+  TileType tile_tmp(tile_v.size(), std::move(mem_view), tile_v.size().rows());
+
+  // clang-format off
+  lapack::lacpy(lapack::MatrixType::Lower,
+      tile_v.size().rows(), tile_v.size().cols(),
+      tile_v.ptr(), tile_v.ld(),
+      tile_tmp.ptr(), tile_tmp.ld());
+  // clang-format on
+
+  // set upper part to zero and 1 on diagonal (reflectors)
+  // clang-format off
+  lapack::laset(lapack::MatrixType::Upper,
+      tile_tmp.size().rows(), tile_tmp.size().cols(),
+      Type(0), // off diag
+      Type(1), // on  diag
+      tile_tmp.ptr(), tile_tmp.ld());
+  // clang-format on
+
+  return ConstTileType(std::move(tile_tmp));
+});
 
 int miniapp(hpx::program_options::variables_map& vm) {
   const SizeType n = vm["matrix-rows"].as<SizeType>();
@@ -65,8 +87,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
     std::cout << std::endl;
     std::cout << ">>> COMPUTING panel" << std::endl;
-    std::cout << ">>> Ai " << A.read(Ai_start).get()({0, 0}) << " " << Ai_size << " " << Ai_start
-              << std::endl;
+    std::cout << ">>> Ai " << Ai_size << " " << Ai_start << std::endl;
 
     MatrixType T(LocalElementSize{nb, nb}, distribution.blockSize());
     dlaf::matrix::util::set(T, [](auto&&) { return 0; });
@@ -479,7 +500,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
       const bool is_diagonal_tile = (Ai_start.row() == index_tile_v.row());
       if (is_diagonal_tile)
-        setup_V(fut_tile_v);
+        fut_tile_v = fut_tile_v.then(setup_v_func);
 
       auto gemm_func = unwrapping([](auto&& tile_v, auto&& tile_w2, auto&& tile_x) {
         // clang-format off
@@ -519,7 +540,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
           const bool is_first_reflector_tile = (Ai_start.row() == index_tile_v.row());
           if (is_first_reflector_tile)
-            setup_V(fut_tile_v);
+            fut_tile_v = fut_tile_v.then(setup_v_func);
 
           auto her2k_func = unwrapping([](auto&& tile_v, auto&& tile_x, auto&& tile_at) {
             // clang-format off
@@ -547,7 +568,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
             const bool is_first_reflector_tile = (Ai_start.row() == index_tile_v.row());
             if (is_first_reflector_tile)
-              setup_V(fut_tile_v);
+              fut_tile_v = fut_tile_v.then(setup_v_func);
 
             auto gemm_a_func = unwrapping([](auto&& tile_x, auto&& tile_v, auto&& tile_at) {
               // clang-format off
@@ -573,7 +594,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
             const bool is_first_reflector_tile = (Ai_start.row() == index_tile_v.row());
             if (is_first_reflector_tile)
-              setup_V(fut_tile_v);
+              fut_tile_v = fut_tile_v.then(setup_v_func);
 
             auto gemm_b_func = unwrapping([](auto&& tile_v, auto&& tile_x, auto&& tile_at) {
               // clang-format off
@@ -651,29 +672,4 @@ void print_tile(const ConstTileType& tile) {
       std::cout << tile({i_loc, j_loc}) << ", ";
     std::cout << std::endl;
   }
-}
-
-void setup_V(hpx::shared_future<ConstTileType>& fut_tile_v) {
-  const ConstTileType& tile_v = fut_tile_v.get();
-
-  MemoryViewType mem_view(dlaf::util::size_t::mul(tile_v.size().rows(), tile_v.size().cols()));
-  TileType tile_tmp(tile_v.size(), std::move(mem_view), tile_v.size().rows());
-
-  // clang-format off
-  lapack::lacpy(lapack::MatrixType::Lower,
-      tile_v.size().rows(), tile_v.size().cols(),
-      tile_v.ptr(), tile_v.ld(),
-      tile_tmp.ptr(), tile_tmp.ld());
-  // clang-format on
-
-  // set upper part to zero and 1 on diagonal (reflectors)
-  // clang-format off
-  lapack::laset(lapack::MatrixType::Upper,
-      tile_tmp.size().rows(), tile_tmp.size().cols(),
-      Type(0), // off diag
-      Type(1), // on  diag
-      tile_tmp.ptr(), tile_tmp.ld());
-  // clang-format on
-
-  fut_tile_v = hpx::make_ready_future<ConstTileType>(std::move(tile_tmp));
 }
