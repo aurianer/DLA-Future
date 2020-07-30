@@ -85,10 +85,10 @@ int miniapp(hpx::program_options::variables_map& vm) {
       for (const LocalTileIndex& index_tile_v : iterate_range2d(Ai_start, Ai_size)) {
         const ConstTileType& tile_v = A.read(index_tile_v).get();
 
-        const bool contains_first_component = (index_tile_v.row() == Ai_start.row());
-        const SizeType first_tile_element = contains_first_component ? index_el_x0.row() : 0;
+        const bool has_first_component = (index_tile_v.row() == Ai_start.row());
+        const SizeType first_tile_element = has_first_component ? index_el_x0.row() : 0;
 
-        if (contains_first_component)
+        if (has_first_component)
           x0 = tile_v(index_el_x0);
 
         const Type* v = tile_v.ptr({first_tile_element, index_el_x0.col()});
@@ -115,9 +115,9 @@ int miniapp(hpx::program_options::variables_map& vm) {
       for (const LocalTileIndex& index_tile_v : iterate_range2d(Ai_start, Ai_size)) {
         TileType tile_v = A(index_tile_v).get();
 
-        const bool contains_first_component = (index_tile_v.row() == Ai_start.row());
+        const bool has_first_component = (index_tile_v.row() == Ai_start.row());
         // skip the one
-        const SizeType first_tile_element = contains_first_component ? index_el_x0.row() + 1 : 0;
+        const SizeType first_tile_element = has_first_component ? index_el_x0.row() + 1 : 0;
 
         // because it skips the first component
         if (first_tile_element >= tile_v.size().rows())
@@ -140,8 +140,8 @@ int miniapp(hpx::program_options::variables_map& vm) {
           for (const LocalTileIndex& index_tile_a : iterate_range2d(Ai_start, Ai_size)) {
             const ConstTileType& tile = A.read(index_tile_a).get();
 
-            const bool contains_first_component = (index_tile_a.row() == Ai_start.row());
-            const SizeType first_element_in_tile = contains_first_component ? index_el_x0.row() : 0;
+            const bool has_first_component = (index_tile_a.row() == Ai_start.row());
+            const SizeType first_element_in_tile = has_first_component ? index_el_x0.row() : 0;
 
             const TileElementSize A_size{tile.size().rows() - first_element_in_tile,
                                          tile.size().cols() - (index_el_x0.col() + 1)};
@@ -150,7 +150,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
             const TileElementIndex W_start{0, index_el_x0.col() + 1};
 
             // W += 1 . A* . V
-            const Type beta = contains_first_component ? 0 : 1;
+            const Type beta = has_first_component ? 0 : 1;
             // clang-format off
             blas::gemv(blas::Layout::ColMajor,
                 blas::Op::ConjTrans,
