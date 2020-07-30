@@ -29,7 +29,25 @@ using ConstTileType = dlaf::Tile<const Type, dlaf::Device::CPU>;
 
 using MemoryViewType = dlaf::memory::MemoryView<Type, dlaf::Device::CPU>;
 
-void print(ConstMatrixType& matrix);
+//#define TRACE_ON
+
+#ifdef TRACE_ON
+template <class T>
+void trace(T&& arg) {
+  std::cout << arg << std::endl;
+}
+template <class T, class ... Ts>
+void trace(T&& arg, Ts&& ... args) {
+  std::cout << arg << " ";
+  trace(args...);
+};
+#else
+template <class ... Ts>
+void trace(Ts&& ...) {
+}
+#endif
+
+void print(ConstMatrixType& matrix, std::string prefix = "");
 void print_tile(const ConstTileType& tile);
 
 auto setup_v_func = hpx::util::unwrapping([](const ConstTileType& tile_v) -> ConstTileType {
@@ -67,11 +85,9 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
   const auto& distribution = A.distribution();
 
-  std::cout << "A = ";
-  print(A);
-
-  std::cout << A << std::endl;
-  std::cout << A.distribution().localNrTiles() << std::endl;
+  print(A, "A = ");
+  trace(A);
+  trace(A.distribution().localNrTiles());
 
   using dlaf::common::iterate_range2d;
   using hpx::util::unwrapping;
@@ -85,9 +101,8 @@ int miniapp(hpx::program_options::variables_map& vm) {
     const LocalTileIndex At_start{Ai_start.row(), Ai_start.col() + 1};
     const LocalTileSize At_size{Ai_size.rows(), A.nrTiles().cols() - (Ai_start.col() + 1)};
 
-    std::cout << std::endl;
-    std::cout << ">>> COMPUTING panel" << std::endl;
-    std::cout << ">>> Ai " << Ai_size << " " << Ai_start << std::endl;
+    trace(">>> COMPUTING panel");
+    trace(">>> Ai ", Ai_size, Ai_start);
 
     MatrixType T(LocalElementSize{nb, nb}, distribution.blockSize());
     dlaf::matrix::util::set(T, [](auto&&) { return 0; });
@@ -97,10 +112,10 @@ int miniapp(hpx::program_options::variables_map& vm) {
     const SizeType last_reflector = (nb - 1) - (Ai_size.rows() == 1 ? 1 : 0);
     for (SizeType j_reflector = 0; j_reflector <= last_reflector; ++j_reflector) {
       const TileElementIndex index_el_x0{j_reflector, j_reflector};
-      std::cout << ">>> COMPUTING local reflector " << index_el_x0 << std::endl;
+      trace(">>> COMPUTING local reflector ", index_el_x0);
 
       // compute norm + identify x0 component
-      std::cout << "COMPUTING NORM" << std::endl;
+      trace("COMPUTING NORM");
       Type x0;
       Type norm_x = 0;
       for (const LocalTileIndex& index_tile_v : iterate_range2d(Ai_start, Ai_size)) {
@@ -117,21 +132,21 @@ int miniapp(hpx::program_options::variables_map& vm) {
       }
       norm_x = std::sqrt(norm_x);
 
-      std::cout << "|x| = " << norm_x << std::endl;
-      std::cout << "x0 = " << x0 << std::endl;
+      trace("|x| = ", norm_x);
+      trace("x0  = ", x0);
 
       // compute first component of the reflector
       const Type y = std::signbit(x0) ? norm_x : -norm_x;
       A(Ai_start).get()(index_el_x0) = 1;  // TODO do we want to change this?
 
-      std::cout << "y = " << y << std::endl;
+      trace("y   = ", y);
 
       // compute tau
       const Type tau = (y - x0) / y;
-      std::cout << "t = " << tau << std::endl;
+      trace("tau = ", tau);
 
       // compute V (reflector components)
-      std::cout << "COMPUTING REFLECTOR COMPONENT" << std::endl;
+      trace("COMPUTING REFLECTOR COMPONENT");
 
       dlaf::GlobalElementIndex
           index_reflector{distribution.template globalElementFromLocalTileAndTileElement<
@@ -195,8 +210,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
           hpx::dataflow(compute_W_func, A.read(index_tile_a), W(LocalTileIndex{0, 0}));
         }
-        std::cout << "W = ";
-        print(W);
+        print(W, "W = ");
 
         // update trailing panel
         for (const LocalTileIndex& index_tile_a : iterate_range2d(Ai_start, Ai_size)) {
@@ -233,15 +247,14 @@ int miniapp(hpx::program_options::variables_map& vm) {
       // put in place the previously computed result
       A(Ai_start).get()(index_el_x0) = y;
 
-      std::cout << "A = ";
-      print(A);
+      print(A, "A = ");
 
       // TODO compute T-factor component for this reflector
       // T(0:j, j) = T(0:j, 0:j) . -tau(j) . V(j:, 0:j)* . V(j:, j)
       const TileElementSize T_size{index_el_x0.row(), 1};
       const TileElementIndex T_start{0, index_el_x0.col()};
       for (const auto& index_tile_v : iterate_range2d(Ai_start, Ai_size)) {
-        std::cout << "* COMPUTING T " << index_tile_v << std::endl;
+        trace("* COMPUTING T ", index_tile_v);
 
         const bool has_first_component = (index_tile_v.row() == Ai_start.row());
         // skip the first component, becuase it should be 1, but it is not
@@ -258,7 +271,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
           // set tau on the diagonal
           if (has_first_component) {
-            std::cout << "t on diagonal " << tau << std::endl;
+            trace("t on diagonal ", tau);
             tile_t(index_el_x0) = tau;
 
             // compute first component with implicit one
@@ -266,14 +279,14 @@ int miniapp(hpx::program_options::variables_map& vm) {
               const auto index_el_va = dlaf::common::internal::transposed(index_el_t);
               tile_t(index_el_t) = -tau * tile_v(index_el_va);
 
-              std::cout << tile_t(index_el_t) << " " << -tau << " " << tile_v(index_el_va) << std::endl;
+              trace(tile_t(index_el_t), -tau, tile_v(index_el_va));
             }
           }
 
           if (Va_start.row() < tile_v.size().rows() && Vb_start.row() < tile_v.size().rows()) {
-            std::cout << "GEMV" << Va_start << " " << V_size << "  " << Vb_start << std::endl;
+            trace("GEMV", Va_start, V_size, Vb_start);
             for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
-              std::cout << "t[" << i_loc << "] " << tile_t({i_loc, index_el_x0.col()}) << std::endl;
+              trace("t[", i_loc, "]", tile_t({i_loc, index_el_x0.col()}));
 
             // t = -tau . V* . V
             const Type alpha = -tau;
@@ -289,7 +302,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
             // clang-format on
 
             for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
-              std::cout << "t*[" << i_loc << "] " << tile_t({i_loc, index_el_x0.col()}) << std::endl;
+              trace("t*[", i_loc, "] ", tile_t({i_loc, index_el_x0.col()}));
           }
         });
 
@@ -322,13 +335,11 @@ int miniapp(hpx::program_options::variables_map& vm) {
       // print(T);
     }
 
-    std::cout << "T = ";
-    print(T);
+    print(T, "T = ");
 
     // TODO UPDATE TRAILING MATRIX
-    std::cout << ">>> UPDATE TRAILING MATRIX" << std::endl;
-    std::cout << ">>> At " << A.read(At_start).get()({0, 0}) << " " << At_size << " " << At_start
-              << std::endl;
+    trace(">>> UPDATE TRAILING MATRIX");
+    trace(">>> At ", At_size, At_start);
 
     MatrixType W({Ai_size.rows() * nb, nb}, distribution.blockSize());
     // TODO TRMM W = V . T
@@ -336,7 +347,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
       const LocalTileIndex index_tile_v{i_t, j_panel};
       const LocalTileIndex index_tile_w{i_t - At_start.row(), 0};
 
-      std::cout << "COMPUTING W" << index_tile_w << " with V " << index_tile_v << std::endl;
+      trace("COMPUTING W", index_tile_w, "with V", index_tile_v);
 
       const bool is_diagonal_tile = index_tile_v.row() == At_start.row();
 
@@ -349,7 +360,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
         // clang-format on
 
         if (is_diagonal_tile) {  // is this the first one? (diagonal)
-          std::cout << "setting V on W" << std::endl;
+          trace("setting V on W");
           // set upper part to zero and 1 on diagonal (reflectors)
           // clang-format off
           lapack::laset(lapack::MatrixType::Upper,
@@ -377,8 +388,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
       hpx::dataflow(trmm_func, T.read(LocalTileIndex{0, 0}), W(index_tile_w));
     }
 
-    std::cout << "W = ";
-    print(W);
+    print(W, "W = ");
 
     // TODO HEMM X = At . W
     MatrixType X({At_size.rows() * nb, W.size().cols()}, distribution.blockSize());
@@ -388,7 +398,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
       for (SizeType j_t = At_start.col(); j_t <= i_t; ++j_t) {
         const LocalTileIndex index_tile_at{i_t, j_t};
 
-        std::cout << "COMPUTING X " << index_tile_at << std::endl;
+        trace("COMPUTING X", index_tile_at);
 
         const bool is_diagonal_tile = (i_t == j_t);
 
@@ -418,8 +428,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
             const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
             const LocalTileIndex index_tile_w{index_tile_at.col() - At_start.col(), 0};
 
-            std::cout << "GEMM(1) " << index_tile_x << " " << index_tile_at << " " << index_tile_w
-                      << std::endl;
+            trace("GEMM(1)", index_tile_x, index_tile_at, index_tile_w);
 
             auto gemm_a_func = unwrapping([](auto&& tile_a, auto&& tile_w, auto&& tile_x) {
               // clang-format off
@@ -442,8 +451,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
             const LocalTileIndex index_tile_x{index_tile_at.col() - At_start.col(), 0};
             const LocalTileIndex index_tile_w{index_tile_at.row() - At_start.row(), 0};
 
-            std::cout << "GEMM(2) " << index_tile_x << " " << index_tile_at << " " << index_tile_w
-                      << std::endl;
+            trace("GEMM(2)", index_tile_x, index_tile_at, index_tile_w);
 
             auto gemm_b_func = unwrapping([](auto&& tile_a, auto&& tile_w, auto&& tile_x) {
               // clang-format off
@@ -464,8 +472,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
       }
     }
 
-    std::cout << "X = ";
-    print(X);
+    print(X, "X = ");
 
     // TODO GEMM W2 = W* . X
     for (const auto& index_tile : iterate_range2d(W.nrTiles())) {
@@ -487,14 +494,13 @@ int miniapp(hpx::program_options::variables_map& vm) {
       hpx::dataflow(gemm_func, W.read(index_tile), X.read(index_tile), T(LocalTileIndex{0, 0}));
     }
 
-    std::cout << "W2 = ";
-    print(T);
+    print(T, "W2 = ");
 
     // TODO GEMM X = X - 0.5 . V . W2
     for (const auto& index_tile_x : iterate_range2d(W.nrTiles())) {
       const LocalTileIndex index_tile_v{Ai_start.row() + index_tile_x.row(), Ai_start.col()};
 
-      std::cout << "UPDATING X" << index_tile_x << " V" << index_tile_v << std::endl;
+      trace("UPDATING X", index_tile_x, "V", index_tile_v);
 
       hpx::shared_future<ConstTileType> fut_tile_v = A.read(index_tile_v);
 
@@ -519,16 +525,15 @@ int miniapp(hpx::program_options::variables_map& vm) {
       hpx::dataflow(gemm_func, fut_tile_v, T(LocalTileIndex{0, 0}), X(index_tile_x));
     }
 
-    std::cout << "X = ";
-    print(X);
+    print(X, "X = ");
 
     // TODO HER2K At = At - X . V* + V . X*
-    std::cout << "At" << At_start << " size:" << At_size << std::endl;
+    trace("At", At_start, "size:", At_size);
     for (SizeType i = At_start.row(); i < A.nrTiles().cols(); ++i) {
       for (SizeType j = At_start.col(); j <= i; ++j) {
         const LocalTileIndex index_tile_at{i, j};
 
-        std::cout << "HER2K At" << index_tile_at << std::endl;
+        trace("HER2K At", index_tile_at);
 
         const bool is_diagonal_tile = (index_tile_at.row() == index_tile_at.col());
 
@@ -558,7 +563,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
           hpx::dataflow(her2k_func, fut_tile_v, X.read(index_tile_x), A(index_tile_at));
         }
         else {
-          std::cout << "double gemm" << std::endl;
+          trace("double gemm");
 
           // GEMM A: X . V*
           {
@@ -616,8 +621,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
     }
   }
 
-  std::cout << "Z = ";
-  print(A);
+  print(A, "Z = ");
 
   return hpx::finalize();
 }
@@ -640,11 +644,11 @@ int main(int argc, char** argv) {
   return ret_code;
 }
 
-void print(ConstMatrixType& matrix) {
+void print(ConstMatrixType& matrix, std::string prefix) {
   using dlaf::common::iterate_range2d;
 
   std::ostringstream ss;
-  ss << "np.array([";
+  ss << prefix << "np.array([";
 
   const auto& distribution = matrix.distribution();
   auto matrix_size = distribution.size();
@@ -654,7 +658,6 @@ void print(ConstMatrixType& matrix) {
 
     const auto& tile = matrix.read(tile_g).get();
 
-    // std::cout << index_g << " " << index_e << " " << tile(index_e) << std::endl;
     ss << tile(index_e) << ", ";
   }
 
@@ -663,13 +666,15 @@ void print(ConstMatrixType& matrix) {
     matrix_size.transpose();
   ss << "]).reshape" << matrix_size << (is_vector ? "" : ".T") << std::endl;
 
-  std::cout << ss.str();
+  trace(ss.str());
 }
 
 void print_tile(const ConstTileType& tile) {
+  std::ostringstream ss;
   for (SizeType i_loc = 0; i_loc < tile.size().rows(); ++i_loc) {
     for (SizeType j_loc = 0; j_loc < tile.size().cols(); ++j_loc)
-      std::cout << tile({i_loc, j_loc}) << ", ";
-    std::cout << std::endl;
+      ss << tile({i_loc, j_loc}) << ", ";
+    ss << std::endl;
   }
+  trace(ss.str());
 }
