@@ -75,78 +75,76 @@ int miniapp(hpx::program_options::variables_map& vm) {
     dlaf::matrix::util::set(T, [](auto&&) { return 0; });
 
     // for each column in the panel, compute reflector and update panel
-    for (SizeType j_local_reflector = 0; j_local_reflector < nb; ++j_local_reflector) {
-      // TODO fix check: is there a panel underneath to annihilate?
-      if (Ai_size.rows() == 1 && j_local_reflector == nb - 1)
-        break;
-
-      std::cout << ">>> COMPUTING local reflector " << j_local_reflector << std::endl;
-
-      const TileElementIndex index_el_x0{j_local_reflector, j_local_reflector};
+    // if reflector would be just the first 1, skip the last column
+    const SizeType last_reflector = (nb - 1) - (Ai_size.rows() == 1 ? 1 : 0);
+    for (SizeType j_reflector = 0; j_reflector <= last_reflector; ++j_reflector) {
+      const TileElementIndex index_el_x0{j_reflector, j_reflector};
+      std::cout << ">>> COMPUTING local reflector " << index_el_x0 << std::endl;
 
       // compute norm + identify x0 component
       std::cout << "COMPUTING NORM" << std::endl;
       Type x0;
       Type norm_x = 0;
-      for (SizeType i = Ai_start.row(); i < distribution.nrTiles().rows(); ++i) {
-        const ConstTileType& tile_v = A.read(LocalTileIndex{i, Ai_start.col()}).get();
+      for (const LocalTileIndex& index_tile_v : iterate_range2d(Ai_start, Ai_size)) {
+        const ConstTileType& tile_v = A.read(index_tile_v).get();
 
-        if (i == Ai_start.row())
+        const bool contains_first_component = (index_tile_v.row() == Ai_start.row());
+        const SizeType first_tile_element = contains_first_component ? index_el_x0.row() : 0;
+
+        if (contains_first_component)
           x0 = tile_v(index_el_x0);
 
-        const SizeType first_tile_element = (i == Ai_start.row()) ? index_el_x0.row() : 0;
-        for (SizeType i_sub = first_tile_element; i_sub < tile_v.size().rows(); ++i_sub) {
-          Type x = tile_v({i_sub, index_el_x0.col()});
-          norm_x += x * x;
-          std::cout << "norm: " << x << std::endl;
-        }
+        const Type * v = tile_v.ptr({first_tile_element, index_el_x0.col()});
+        norm_x += blas::dot(tile_v.size().rows() - first_tile_element, v, 1, v, 1);
       }
       norm_x = std::sqrt(norm_x);
-      std::cout << "|x| = " << norm_x << std::endl;
 
+      std::cout << "|x| = " << norm_x << std::endl;
       std::cout << "x0 = " << x0 << std::endl;
 
       // compute first component of the reflector
       const Type y = std::signbit(x0) ? norm_x : -norm_x;
-      A(Ai_start).get()(index_el_x0) = 1;
+      A(Ai_start).get()(index_el_x0) = 1; // TODO do we want to change this?
 
       std::cout << "y = " << y << std::endl;
 
       // compute tau
       const Type tau = (y - x0) / y;
-      std::cout << "t" << j_local_reflector << " = " << tau << std::endl;
+      std::cout << "t = " << tau << std::endl;
 
       std::cout << "COMPUTING REFLECTOR COMPONENT" << std::endl;
       // compute V (reflector components)
-      for (SizeType i = Ai_start.row(); i < distribution.nrTiles().rows(); ++i) {
-        TileType tile_v = A(LocalTileIndex{i, Ai_start.col()}).get();
+      const Type k_component = 1 / (x0 - y);
+      for (const LocalTileIndex& index_tile_v : iterate_range2d(Ai_start, Ai_size)) {
+        TileType tile_v = A(index_tile_v).get();
 
-        const SizeType first_tile_element = (i == Ai_start.row()) ? index_el_x0.row() + 1 : 0;
-        for (SizeType i_sub = first_tile_element; i_sub < tile_v.size().rows(); ++i_sub) {
-          Type& x = tile_v({i_sub, index_el_x0.col()});
+        const bool contains_first_component = (index_tile_v.row() == Ai_start.row());
+        // skip the one
+        const SizeType first_tile_element = contains_first_component ? index_el_x0.row() + 1: 0;
 
-          std::cout << "x " << i * nb + i_sub << " " << x << " " << x0 << " " << y << std::endl;
-          x = x / (x0 - y);
-          std::cout << "x " << i * nb + i_sub << "=" << x << std::endl;
-        }
+        // because it skips the first component
+        if (first_tile_element >= tile_v.size().rows())
+          continue;
+
+        Type* v = tile_v.ptr({first_tile_element, index_el_x0.col()});
+        blas::scal(tile_v.size().rows() - first_tile_element, k_component, v, 1);
       }
 
       // is there a remaining panel?
-      if (j_local_reflector < nb - 1) {
+      if (index_el_x0.col() < nb - 1) {
         // compute W
         const LocalElementSize W_size{1, nb};
         MatrixType W(W_size, distribution.blockSize());
         {
           TileType w = W(LocalTileIndex{0, 0}).get();
 
-          // for each tile in the panel
-          for (SizeType h = Ai_start.row(); h < distribution.nrTiles().rows(); ++h) {
-            const LocalTileIndex index_a{h, Ai_start.col()};
-            const ConstTileType& tile = A.read(index_a).get();
+          // for each tile in the panel, consider just the trailing panel
+          // i.e. all rows (height = reflector), just columns to the right of the current reflector
+          for (const LocalTileIndex& index_tile_a : iterate_range2d(Ai_start, Ai_size)) {
+            const ConstTileType& tile = A.read(index_tile_a).get();
 
-            // consider just the trailing panel
-            // i.e. all rows (height = reflector), just columns to the right of the current reflector
-            const SizeType first_element_in_tile = (h == Ai_start.row()) ? index_el_x0.row() : 0;
+            const bool contains_first_component = (index_tile_a.row() == Ai_start.row());
+            const SizeType first_element_in_tile = contains_first_component ? index_el_x0.row() : 0;
 
             const TileElementSize A_size{tile.size().rows() - first_element_in_tile,
                                          tile.size().cols() - (index_el_x0.col() + 1)};
@@ -154,10 +152,16 @@ int miniapp(hpx::program_options::variables_map& vm) {
             const TileElementIndex V_start{first_element_in_tile, index_el_x0.col()};
             const TileElementIndex W_start{0, index_el_x0.col() + 1};
 
-            // w += 1 . A* . v
-            const Type beta = (h == Ai_start.row() ? 0 : 1);
-            blas::gemv(blas::Layout::ColMajor, blas::Op::ConjTrans, A_size.rows(), A_size.cols(), 1.0,
-                       tile.ptr(A_start), tile.ld(), tile.ptr(V_start), 1, beta, w.ptr(W_start), w.ld());
+            // W += 1 . A* . V
+            const Type beta = contains_first_component ? 0 : 1;
+            blas::gemv(
+                blas::Layout::ColMajor, blas::Op::ConjTrans,
+                A_size.rows(), A_size.cols(),
+                Type(1),
+                tile.ptr(A_start), tile.ld(),
+                tile.ptr(V_start), 1,
+                beta,
+                w.ptr(W_start), w.ld());
           }
         }
         std::cout << "W = ";
@@ -167,10 +171,10 @@ int miniapp(hpx::program_options::variables_map& vm) {
         {
           TileType w = W(LocalTileIndex{0, 0}).get();
 
-          for (SizeType h = Ai_start.row(); h < distribution.nrTiles().rows(); ++h) {
-            TileType tile_a = A(LocalTileIndex{h, Ai_start.col()}).get();
+          for (const LocalTileIndex& index_tile_a : iterate_range2d(Ai_start, Ai_size)) {
+            TileType tile_a = A(index_tile_a).get();
 
-            const SizeType first_element_in_tile = (h == Ai_start.row()) ? index_el_x0.row() : 0;
+            const SizeType first_element_in_tile = (index_tile_a.row() == Ai_start.row()) ? index_el_x0.row() : 0;
 
             const TileElementSize V_size{tile_a.size().rows() - first_element_in_tile, 1};
             const TileElementSize W_size{1, tile_a.size().cols() - (index_el_x0.col() + 1)};
@@ -182,14 +186,19 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
             // Pt = Pt - tau * v * w*
             const Type alpha = -tau;
-            blas::ger(blas::Layout::ColMajor, A_size.rows(), A_size.cols(), alpha, tile_a.ptr(V_start),
-                      1, w.ptr(W_start), w.ld(), tile_a.ptr(A_start), tile_a.ld());
+            blas::ger(
+                blas::Layout::ColMajor,
+                A_size.rows(), A_size.cols(),
+                alpha,
+                tile_a.ptr(V_start), 1,
+                w.ptr(W_start), w.ld(),
+                tile_a.ptr(A_start), tile_a.ld());
           }
         }
       }
 
       // put in place the previously computed result
-      A(Ai_start).get()({j_local_reflector, j_local_reflector}) = y;
+      A(Ai_start).get()(index_el_x0) = y;
 
       std::cout << "A = ";
       print(A);
@@ -231,7 +240,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
           if (Va_start.row() < tile_v.size().rows() && Vb_start.row() < tile_v.size().rows()) {
             std::cout << "GEMV" << Va_start << " " << V_size << "  " << Vb_start << std::endl;
             for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
-              std::cout << "t[" << i_loc << "] " << tile_t({i_loc, j_local_reflector}) << std::endl;
+              std::cout << "t[" << i_loc << "] " << tile_t({i_loc, index_el_x0.col()}) << std::endl;
 
             // t = -tau . V* . V
             const Type alpha = -tau;
@@ -244,13 +253,13 @@ int miniapp(hpx::program_options::variables_map& vm) {
                 beta, tile_t.ptr(T_start), 1);
 
             for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
-              std::cout << "t*[" << i_loc << "] " << tile_t({i_loc, j_local_reflector}) << std::endl;
+              std::cout << "t*[" << i_loc << "] " << tile_t({i_loc, index_el_x0.col()}) << std::endl;
           }
         }
 
         std::cout << "TRMV" << std::endl;
         for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
-          std::cout << "t[" << i_loc << "] " << tile_t({i_loc, j_local_reflector}) << std::endl;
+          std::cout << "t[" << i_loc << "] " << tile_t({i_loc, index_el_x0.col()}) << std::endl;
 
         std::cout << tile_t(T_start) << " " << tile_t({0, 0}) << std::endl;
 
@@ -258,12 +267,12 @@ int miniapp(hpx::program_options::variables_map& vm) {
         blas::trmv(
             blas::Layout::ColMajor,
             blas::Uplo::Upper, blas::Op::NoTrans, blas::Diag::NonUnit,
-            j_local_reflector,
-            tile_t.ptr({0, 0}), tile_t.ld(),
+            index_el_x0.row(),
+            tile_t.ptr(), tile_t.ld(),
             tile_t.ptr(T_start), 1);
 
         for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
-          std::cout << "t[" << i_loc << "] " << tile_t({i_loc, j_local_reflector}) << std::endl;
+          std::cout << "t[" << i_loc << "] " << tile_t({i_loc, index_el_x0.col()}) << std::endl;
       }
 
       //std::cout << "T(partial) = ";
@@ -273,7 +282,6 @@ int miniapp(hpx::program_options::variables_map& vm) {
     std::cout << "T = ";
     print(T);
 
-    // ***************************
     // TODO UPDATE TRAILING MATRIX
     std::cout << ">>> UPDATE TRAILING MATRIX" << std::endl;
     std::cout << ">>> At " << A.read(At_start).get()({0, 0}) << " " << At_size << " " << At_start << std::endl;
