@@ -6,11 +6,11 @@
 
 #include "dlaf/common/index2d.h"
 #include "dlaf/common/range2d.h"
+#include "dlaf/lapack_tile.h"
 #include "dlaf/matrix.h"
 #include "dlaf/matrix/index.h"
 #include "dlaf/types.h"
 #include "dlaf/util_matrix.h"
-#include "dlaf/lapack_tile.h"
 
 using Type = double;
 
@@ -57,10 +57,6 @@ int miniapp(hpx::program_options::variables_map& vm) {
   // for each panel
   const LocalTileSize A_size = distribution.localNrTiles();
   for (SizeType j_panel = 0; j_panel < A_size.cols() && (j_panel + 1) < A_size.rows(); ++j_panel) {
-
-    //if (j_panel > 0)
-    //  break;
-
     const LocalTileIndex Ai_start{j_panel + 1, j_panel};
     const LocalTileSize Ai_size{distribution.nrTiles().rows() - Ai_start.row(), 1};
 
@@ -69,7 +65,8 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
     std::cout << std::endl;
     std::cout << ">>> COMPUTING panel" << std::endl;
-    std::cout << ">>> Ai " << A.read(Ai_start).get()({0, 0}) << " " << Ai_size << " " << Ai_start << std::endl;
+    std::cout << ">>> Ai " << A.read(Ai_start).get()({0, 0}) << " " << Ai_size << " " << Ai_start
+              << std::endl;
 
     MatrixType T(LocalElementSize{nb, nb}, distribution.blockSize());
     dlaf::matrix::util::set(T, [](auto&&) { return 0; });
@@ -94,7 +91,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
         if (contains_first_component)
           x0 = tile_v(index_el_x0);
 
-        const Type * v = tile_v.ptr({first_tile_element, index_el_x0.col()});
+        const Type* v = tile_v.ptr({first_tile_element, index_el_x0.col()});
         norm_x += blas::dot(tile_v.size().rows() - first_tile_element, v, 1, v, 1);
       }
       norm_x = std::sqrt(norm_x);
@@ -104,7 +101,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
       // compute first component of the reflector
       const Type y = std::signbit(x0) ? norm_x : -norm_x;
-      A(Ai_start).get()(index_el_x0) = 1; // TODO do we want to change this?
+      A(Ai_start).get()(index_el_x0) = 1;  // TODO do we want to change this?
 
       std::cout << "y = " << y << std::endl;
 
@@ -120,7 +117,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
         const bool contains_first_component = (index_tile_v.row() == Ai_start.row());
         // skip the one
-        const SizeType first_tile_element = contains_first_component ? index_el_x0.row() + 1: 0;
+        const SizeType first_tile_element = contains_first_component ? index_el_x0.row() + 1 : 0;
 
         // because it skips the first component
         if (first_tile_element >= tile_v.size().rows())
@@ -154,14 +151,16 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
             // W += 1 . A* . V
             const Type beta = contains_first_component ? 0 : 1;
-            blas::gemv(
-                blas::Layout::ColMajor, blas::Op::ConjTrans,
+            // clang-format off
+            blas::gemv(blas::Layout::ColMajor,
+                blas::Op::ConjTrans,
                 A_size.rows(), A_size.cols(),
                 Type(1),
                 tile.ptr(A_start), tile.ld(),
                 tile.ptr(V_start), 1,
                 beta,
                 w.ptr(W_start), w.ld());
+            // clang-format on
           }
         }
         std::cout << "W = ";
@@ -174,7 +173,8 @@ int miniapp(hpx::program_options::variables_map& vm) {
           for (const LocalTileIndex& index_tile_a : iterate_range2d(Ai_start, Ai_size)) {
             TileType tile_a = A(index_tile_a).get();
 
-            const SizeType first_element_in_tile = (index_tile_a.row() == Ai_start.row()) ? index_el_x0.row() : 0;
+            const SizeType first_element_in_tile =
+                (index_tile_a.row() == Ai_start.row()) ? index_el_x0.row() : 0;
 
             const TileElementSize V_size{tile_a.size().rows() - first_element_in_tile, 1};
             const TileElementSize W_size{1, tile_a.size().cols() - (index_el_x0.col() + 1)};
@@ -186,13 +186,14 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
             // Pt = Pt - tau * v * w*
             const Type alpha = -tau;
-            blas::ger(
-                blas::Layout::ColMajor,
+            // clang-format off
+            blas::ger(blas::Layout::ColMajor,
                 A_size.rows(), A_size.cols(),
                 alpha,
                 tile_a.ptr(V_start), 1,
                 w.ptr(W_start), w.ld(),
                 tile_a.ptr(A_start), tile_a.ld());
+            // clang-format on
           }
         }
       }
@@ -245,12 +246,15 @@ int miniapp(hpx::program_options::variables_map& vm) {
             // t = -tau . V* . V
             const Type alpha = -tau;
             const Type beta = 1;
-            blas::gemv(blas::Layout::ColMajor, blas::Op::ConjTrans,
+            // clang-format off
+            blas::gemv(blas::Layout::ColMajor,
+                blas::Op::ConjTrans,
                 V_size.rows(), V_size.cols(),
                 alpha,
                 tile_v.ptr(Va_start), tile_v.ld(),
                 tile_v.ptr(Vb_start), 1,
                 beta, tile_t.ptr(T_start), 1);
+            // clang-format on
 
             for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
               std::cout << "t*[" << i_loc << "] " << tile_t({i_loc, index_el_x0.col()}) << std::endl;
@@ -264,19 +268,20 @@ int miniapp(hpx::program_options::variables_map& vm) {
         std::cout << tile_t(T_start) << " " << tile_t({0, 0}) << std::endl;
 
         // t = T . t
-        blas::trmv(
-            blas::Layout::ColMajor,
+        // clang-format off
+        blas::trmv(blas::Layout::ColMajor,
             blas::Uplo::Upper, blas::Op::NoTrans, blas::Diag::NonUnit,
             index_el_x0.row(),
             tile_t.ptr(), tile_t.ld(),
             tile_t.ptr(T_start), 1);
+        // clang-format on
 
         for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
           std::cout << "t[" << i_loc << "] " << tile_t({i_loc, index_el_x0.col()}) << std::endl;
       }
 
-      //std::cout << "T(partial) = ";
-      //print(T);
+      // std::cout << "T(partial) = ";
+      // print(T);
     }
 
     std::cout << "T = ";
@@ -284,7 +289,8 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
     // TODO UPDATE TRAILING MATRIX
     std::cout << ">>> UPDATE TRAILING MATRIX" << std::endl;
-    std::cout << ">>> At " << A.read(At_start).get()({0, 0}) << " " << At_size << " " << At_start << std::endl;
+    std::cout << ">>> At " << A.read(At_start).get()({0, 0}) << " " << At_size << " " << At_start
+              << std::endl;
 
     MatrixType W({Ai_size.rows() * nb, nb}, distribution.blockSize());
     {
@@ -304,29 +310,34 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
         const bool is_diagonal_tile = index_tile_v.row() == At_start.row();
 
-        lapack::lacpy(
-            is_diagonal_tile ? lapack::MatrixType::Lower : lapack::MatrixType::General,
+        // clang-format off
+        lapack::lacpy(is_diagonal_tile ? lapack::MatrixType::Lower : lapack::MatrixType::General,
             tile_v.size().rows(), tile_v.size().cols(),
             tile_v.ptr(), tile_v.ld(),
             tile_w.ptr(), tile_w.ld());
+        // clang-format on
 
-        if (is_diagonal_tile) { // is this the first one? (diagonal)
+        if (is_diagonal_tile) {  // is this the first one? (diagonal)
           std::cout << "setting V on W" << std::endl;
           // set upper part to zero and 1 on diagonal (reflectors)
+          // clang-format off
           lapack::laset(lapack::MatrixType::Upper,
               tile_w.size().rows(), tile_w.size().cols(),
-              Type(0), Type(1),
+              Type(0), // off diag
+              Type(1), // on  diag
               tile_w.ptr(), tile_w.ld());
+          // clang-format on
         }
 
         // W = V . T
-        blas::trmm(
-            blas::Layout::ColMajor, blas::Side::Right,
-            blas::Uplo::Upper, blas::Op::NoTrans, blas::Diag::NonUnit,
+        // clang-format off
+        blas::trmm(blas::Layout::ColMajor,
+            blas::Side::Right, blas::Uplo::Upper, blas::Op::NoTrans, blas::Diag::NonUnit,
             tile_w.size().rows(), tile_w.size().cols(),
             Type(1),
             tile_t.ptr(), tile_t.ld(),
             tile_w.ptr(), tile_w.ld());
+        // clang-format on
       }
     }
 
@@ -352,18 +363,22 @@ int miniapp(hpx::program_options::variables_map& vm) {
           const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
           const LocalTileIndex index_tile_w = index_tile_x;
 
-          std::cout << "HEMM " << index_tile_x << " " << index_tile_at << " " << index_tile_w << std::endl;
+          std::cout << "HEMM " << index_tile_x << " " << index_tile_at << " " << index_tile_w
+                    << std::endl;
 
           TileType tile_x = X(index_tile_x).get();
           const ConstTileType& tile_w = W.read(index_tile_w).get();
 
-          blas::hemm(blas::Layout::ColMajor, blas::Side::Left, blas::Uplo::Lower,
+          // clang-format off
+          blas::hemm(blas::Layout::ColMajor,
+              blas::Side::Left, blas::Uplo::Lower,
               tile_x.size().rows(), tile_a.size().cols(),
               Type(1),
               tile_a.ptr(), tile_a.ld(),
               tile_w.ptr(), tile_w.ld(),
               Type(1),
               tile_x.ptr(), tile_x.ld());
+          // clang-format on
         }
         else {
           // A  . W
@@ -371,18 +386,22 @@ int miniapp(hpx::program_options::variables_map& vm) {
             const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
             const LocalTileIndex index_tile_w{index_tile_at.col() - At_start.col(), 0};
 
-            std::cout << "GEMM(1) " << index_tile_x << " " << index_tile_at << " " << index_tile_w << std::endl;
+            std::cout << "GEMM(1) " << index_tile_x << " " << index_tile_at << " " << index_tile_w
+                      << std::endl;
 
             TileType tile_x = X(index_tile_x).get();
             const ConstTileType& tile_w = W.read(index_tile_w).get();
 
-            blas::gemm(blas::Layout::ColMajor, blas::Op::NoTrans, blas::Op::NoTrans,
+            // clang-format off
+            blas::gemm(blas::Layout::ColMajor,
+                blas::Op::NoTrans, blas::Op::NoTrans,
                 tile_a.size().rows(), tile_w.size().cols(), tile_a.size().cols(),
                 Type(1),
                 tile_a.ptr(), tile_a.ld(),
                 tile_w.ptr(), tile_w.ld(),
                 Type(1),
                 tile_x.ptr(), tile_x.ld());
+            // clang-format on
           }
 
           // A* . W
@@ -390,18 +409,22 @@ int miniapp(hpx::program_options::variables_map& vm) {
             const LocalTileIndex index_tile_x{index_tile_at.col() - At_start.col(), 0};
             const LocalTileIndex index_tile_w{index_tile_at.row() - At_start.row(), 0};
 
-            std::cout << "GEMM(2) " << index_tile_x << " " << index_tile_at << " " << index_tile_w << std::endl;
+            std::cout << "GEMM(2) " << index_tile_x << " " << index_tile_at << " " << index_tile_w
+                      << std::endl;
 
             TileType tile_x = X(index_tile_x).get();
             const ConstTileType& tile_w = W.read(index_tile_w).get();
 
-            blas::gemm(blas::Layout::ColMajor, blas::Op::ConjTrans, blas::Op::NoTrans,
+            // clang-format off
+            blas::gemm(blas::Layout::ColMajor,
+                blas::Op::ConjTrans, blas::Op::NoTrans,
                 tile_a.size().rows(), tile_w.size().cols(), tile_a.size().cols(),
                 Type(1),
                 tile_a.ptr(), tile_a.ld(),
                 tile_w.ptr(), tile_w.ld(),
                 Type(1),
                 tile_x.ptr(), tile_x.ld());
+            // clang-format on
           }
         }
       }
@@ -419,6 +442,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
         const ConstTileType& tile_x = X.read(index_tile).get();
 
         const Type beta = (index_tile.row() == 0) ? 0 : 1;
+        // clang-format off
         blas::gemm(blas::Layout::ColMajor,
             blas::Op::ConjTrans, blas::Op::NoTrans,
             tile_w2.size().rows(), tile_w2.size().cols(), tile_w.size().cols(),
@@ -427,6 +451,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
             tile_x.ptr(), tile_x.ld(),
             beta,
             tile_w2.ptr(), tile_w2.ld());
+        // clang-format on
       }
     }
 
@@ -451,6 +476,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
         TileType tile_x = X(index_tile_x).get();
         const ConstTileType& tile_v = fut_tile_v.get();
 
+        // clang-format off
         blas::gemm(blas::Layout::ColMajor,
             blas::Op::NoTrans, blas::Op::NoTrans,
             tile_x.size().rows(), tile_x.size().cols(), tile_v.size().cols(),
@@ -459,6 +485,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
             tile_w2.ptr(), tile_w2.ld(),
             Type(1),
             tile_x.ptr(), tile_x.ld());
+        // clang-format on
       }
     }
 
@@ -488,14 +515,16 @@ int miniapp(hpx::program_options::variables_map& vm) {
           const ConstTileType& tile_x = X.read(index_tile_x).get();
 
           std::cout << "her2k" << std::endl;
-          blas::her2k(
-              blas::Layout::ColMajor, blas::Uplo::Lower, blas::Op::NoTrans,
+          // clang-format off
+          blas::her2k(blas::Layout::ColMajor,
+              blas::Uplo::Lower, blas::Op::NoTrans,
               tile_at.size().rows(), tile_v.size().cols(),
               Type(-1),
               tile_v.ptr(), tile_v.ld(),
               tile_x.ptr(), tile_x.ld(),
               Type(1),
               tile_at.ptr(), tile_at.ld());
+          // clang-format on
         }
         else {
           std::cout << "double gemm" << std::endl;
@@ -513,14 +542,16 @@ int miniapp(hpx::program_options::variables_map& vm) {
             const ConstTileType& tile_v = fut_tile_v.get();
             const ConstTileType& tile_x = X.read(index_tile_x).get();
 
-            blas::gemm(
-                blas::Layout::ColMajor, blas::Op::NoTrans, blas::Op::ConjTrans,
+            // clang-format off
+            blas::gemm(blas::Layout::ColMajor,
+                blas::Op::NoTrans, blas::Op::ConjTrans,
                 tile_at.size().rows(), tile_at.size().cols(), tile_x.size().rows(),
                 Type(-1),
                 tile_x.ptr(), tile_x.ld(),
                 tile_v.ptr(), tile_v.ld(),
                 Type(1),
                 tile_at.ptr(), tile_at.ld());
+            // clang-format on
           }
 
           {
@@ -535,14 +566,16 @@ int miniapp(hpx::program_options::variables_map& vm) {
             const ConstTileType& tile_v = fut_tile_v.get();
             const ConstTileType& tile_x = X.read(index_tile_x).get();
 
-            blas::gemm(
-                blas::Layout::ColMajor, blas::Op::NoTrans, blas::Op::ConjTrans,
+            // clang-format off
+            blas::gemm(blas::Layout::ColMajor,
+                blas::Op::NoTrans, blas::Op::ConjTrans,
                 tile_at.size().rows(), tile_at.size().cols(), tile_x.size().rows(),
                 Type(-1),
                 tile_v.ptr(), tile_v.ld(),
                 tile_x.ptr(), tile_x.ld(),
                 Type(1),
                 tile_at.ptr(), tile_at.ld());
+            // clang-format on
           }
         }
       }
@@ -559,7 +592,6 @@ int main(int argc, char** argv) {
   // options
   using namespace hpx::program_options;
   options_description desc_commandline("Usage: " HPX_APPLICATION_STRING " [options]");
-
 
   // clang-format off
   desc_commandline.add_options()
@@ -588,7 +620,7 @@ void print(ConstMatrixType& matrix) {
 
     const auto& tile = matrix.read(tile_g).get();
 
-    //std::cout << index_g << " " << index_e << " " << tile(index_e) << std::endl;
+    // std::cout << index_g << " " << index_e << " " << tile(index_e) << std::endl;
     ss << tile(index_e) << ", ";
   }
 
@@ -614,17 +646,21 @@ void setup_V(hpx::shared_future<ConstTileType>& fut_tile_v) {
   MemoryViewType mem_view(dlaf::util::size_t::mul(tile_v.size().rows(), tile_v.size().cols()));
   TileType tile_tmp(tile_v.size(), std::move(mem_view), tile_v.size().rows());
 
-  lapack::lacpy(
-      lapack::MatrixType::Lower,
+  // clang-format off
+  lapack::lacpy(lapack::MatrixType::Lower,
       tile_v.size().rows(), tile_v.size().cols(),
       tile_v.ptr(), tile_v.ld(),
       tile_tmp.ptr(), tile_tmp.ld());
+  // clang-format on
 
   // set upper part to zero and 1 on diagonal (reflectors)
+  // clang-format off
   lapack::laset(lapack::MatrixType::Upper,
       tile_tmp.size().rows(), tile_tmp.size().cols(),
-      Type(0), Type(1),
+      Type(0), // off diag
+      Type(1), // on  diag
       tile_tmp.ptr(), tile_tmp.ld());
+  // clang-format on
 
   fut_tile_v = hpx::make_ready_future<ConstTileType>(std::move(tile_tmp));
 }
