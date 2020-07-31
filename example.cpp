@@ -36,16 +36,23 @@ template <class T>
 void trace(T&& arg) {
   std::cout << arg << std::endl;
 }
-template <class T, class ... Ts>
-void trace(T&& arg, Ts&& ... args) {
+template <class T, class... Ts>
+void trace(T&& arg, Ts&&... args) {
   std::cout << arg << " ";
   trace(args...);
 };
 #else
-template <class ... Ts>
-void trace(Ts&& ...) {
-}
+template <class... Ts>
+void trace(Ts&&...) {}
 #endif
+
+struct ReflectorParams {
+  Type norm;
+  Type x0;
+  Type y;
+  Type tau;
+  Type factor;
+};
 
 void print(ConstMatrixType& matrix, std::string prefix = "");
 void print_tile(const ConstTileType& tile);
@@ -112,38 +119,83 @@ int miniapp(hpx::program_options::variables_map& vm) {
     const SizeType last_reflector = (nb - 1) - (Ai_size.rows() == 1 ? 1 : 0);
     for (SizeType j_reflector = 0; j_reflector <= last_reflector; ++j_reflector) {
       const TileElementIndex index_el_x0{j_reflector, j_reflector};
+
       trace(">>> COMPUTING local reflector ", index_el_x0);
 
       // compute norm + identify x0 component
       trace("COMPUTING NORM");
-      Type x0;
-      Type norm_x = 0;
-      for (const LocalTileIndex& index_tile_v : iterate_range2d(Ai_start, Ai_size)) {
-        const ConstTileType& tile_v = A.read(index_tile_v).get();
 
-        const bool has_first_component = (index_tile_v.row() == Ai_start.row());
-        const SizeType first_tile_element = has_first_component ? index_el_x0.row() : 0;
+      hpx::future<std::pair<Type, Type>> fut_x0_and_partial_norm =
+          hpx::make_ready_future<std::pair<Type, Type>>();
 
-        if (has_first_component)
-          x0 = tile_v(index_el_x0);
+      for (const LocalTileIndex& index_tile_x : iterate_range2d(Ai_start, Ai_size)) {
+        const bool has_first_component = (index_tile_x.row() == Ai_start.row());
 
-        const Type* v = tile_v.ptr({first_tile_element, index_el_x0.col()});
-        norm_x += blas::dot(tile_v.size().rows() - first_tile_element, v, 1, v, 1);
+        if (has_first_component) {
+          auto compute_x0_and_partial_norm_func =
+              unwrapping([index_el_x0](auto&& tile_x, std::pair<Type, Type>&& x0_and_norm) {
+                x0_and_norm.first = tile_x(index_el_x0);
+
+                const Type* x_ptr = tile_x.ptr(index_el_x0);
+                x0_and_norm.second =
+                    blas::dot(tile_x.size().rows() - index_el_x0.row(), x_ptr, 1, x_ptr, 1);
+
+                trace("x = ", *x_ptr);
+                trace("x0 = ", x0_and_norm.first);
+
+                tile_x(index_el_x0) = 1;  // TODO FIX THIS and remove RW from tile_x
+
+                return std::move(x0_and_norm);
+              });
+
+          fut_x0_and_partial_norm =
+              hpx::dataflow(compute_x0_and_partial_norm_func, A(index_tile_x), fut_x0_and_partial_norm);
+        }
+        else {
+          auto compute_partial_norm_func =
+              unwrapping([index_el_x0](auto&& tile_x, std::pair<Type, Type>&& x0_and_norm) {
+                const Type* x_ptr = tile_x.ptr({0, index_el_x0.col()});
+                x0_and_norm.second += blas::dot(tile_x.size().rows(), x_ptr, 1, x_ptr, 1);
+
+                trace("x = ", *x_ptr);
+
+                return std::move(x0_and_norm);
+              });
+
+          fut_x0_and_partial_norm =
+              hpx::dataflow(compute_partial_norm_func, A.read(index_tile_x), fut_x0_and_partial_norm);
+        }
       }
-      norm_x = std::sqrt(norm_x);
 
-      trace("|x| = ", norm_x);
-      trace("x0  = ", x0);
+      hpx::shared_future<ReflectorParams> reflector_params;
+      {
+        auto compute_parameters_func =
+            unwrapping([](const std::pair<Type, Type>& x0_and_norm, ReflectorParams&& params) {
+              params.x0 = x0_and_norm.first;
+              params.norm = std::sqrt(x0_and_norm.second);
 
-      // compute first component of the reflector
-      const Type y = std::signbit(x0) ? norm_x : -norm_x;
-      A(Ai_start).get()(index_el_x0) = 1;  // TODO do we want to change this?
+              // compute first component of the reflector
+              params.y = std::signbit(params.x0) ? params.norm : -params.norm;
 
-      trace("y   = ", y);
+              // compute tau
+              params.tau = (params.y - params.x0) / params.y;
 
-      // compute tau
-      const Type tau = (y - x0) / y;
-      trace("tau = ", tau);
+              // compute factor
+              params.factor = 1 / (params.x0 - params.y);
+
+              trace("|x| = ", params.norm);
+              trace("x0  = ", params.x0);
+              trace("y   = ", params.y);
+              trace("tau = ", params.tau);
+
+              return std::move(params);
+            });
+
+        hpx::future<ReflectorParams> rw_reflector_params = hpx::make_ready_future<ReflectorParams>();
+
+        reflector_params =
+            hpx::dataflow(compute_parameters_func, fut_x0_and_partial_norm, rw_reflector_params);
+      }
 
       // compute V (reflector components)
       trace("COMPUTING REFLECTOR COMPONENT");
@@ -159,19 +211,18 @@ int miniapp(hpx::program_options::variables_map& vm) {
                                         Ai_start.col()};
       LocalTileSize V_size{distribution.nrTiles().rows() - V_second_component.row(), 1};
 
-      const Type k_component = 1 / (x0 - y);
       for (const LocalTileIndex& index_tile_v : iterate_range2d(V_second_component, V_size)) {
         const bool has_first_component = (index_tile_v.row() == Ai_start.row());
         // if it contains the first component, skip it
         const SizeType first_tile_element = has_first_component ? index_el_x0.row() + 1 : 0;
 
         auto compute_reflector_components_func =
-            unwrapping([index_el_x0, k_component, first_tile_element](auto&& tile_v) {
+            unwrapping([index_el_x0, first_tile_element](const ReflectorParams& params, auto&& tile_v) {
               Type* v = tile_v.ptr({first_tile_element, index_el_x0.col()});
-              blas::scal(tile_v.size().rows() - first_tile_element, k_component, v, 1);
+              blas::scal(tile_v.size().rows() - first_tile_element, params.factor, v, 1);
             });
 
-        hpx::dataflow(compute_reflector_components_func, A(index_tile_v));
+        hpx::dataflow(compute_reflector_components_func, reflector_params, A(index_tile_v));
       }
 
       // is there a remaining panel?
@@ -216,8 +267,9 @@ int miniapp(hpx::program_options::variables_map& vm) {
         for (const LocalTileIndex& index_tile_a : iterate_range2d(Ai_start, Ai_size)) {
           const bool has_first_component = (index_tile_a.row() == Ai_start.row());
 
-          auto apply_reflector_func = unwrapping([index_el_x0, has_first_component](Type tau, auto&& w,
-                                                                                    auto&& tile_a) {
+          auto apply_reflector_func = unwrapping([index_el_x0,
+                                                  has_first_component](const ReflectorParams& params,
+                                                                       auto&& w, auto&& tile_a) {
             const SizeType first_element_in_tile = has_first_component ? index_el_x0.row() : 0;
 
             const TileElementSize V_size{tile_a.size().rows() - first_element_in_tile, 1};
@@ -229,7 +281,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
             const TileElementIndex W_start{0, index_el_x0.col() + 1};
 
             // Pt = Pt - tau * v * w*
-            const Type alpha = -tau;
+            const Type alpha = -params.tau;
             // clang-format off
             blas::ger(blas::Layout::ColMajor,
                 A_size.rows(), A_size.cols(),
@@ -240,12 +292,13 @@ int miniapp(hpx::program_options::variables_map& vm) {
             // clang-format on
           });
 
-          hpx::dataflow(apply_reflector_func, tau, W(LocalTileIndex{0, 0}), A(index_tile_a));
+          hpx::dataflow(apply_reflector_func, reflector_params, W(LocalTileIndex{0, 0}),
+                        A(index_tile_a));
         }
       }
 
       // put in place the previously computed result
-      A(Ai_start).get()(index_el_x0) = y;
+      // A(Ai_start).get()(index_el_x0) = y; // TODO fix this
 
       print(A, "A = ");
 
@@ -260,7 +313,10 @@ int miniapp(hpx::program_options::variables_map& vm) {
         // skip the first component, becuase it should be 1, but it is not
 
         auto gemv_func = unwrapping([T_start, T_size, has_first_component,
-                                     index_el_x0](Type tau, auto&& tile_v, auto&& tile_t) {
+                                     index_el_x0](const ReflectorParams& params, auto&& tile_v,
+                                                  auto&& tile_t) {
+          const Type tau = params.tau;
+
           const SizeType first_element_in_tile = has_first_component ? index_el_x0.row() + 1 : 0;
 
           // T(0:j, j) = -tau . V(j:, 0:j)* . V(j:, j)
@@ -306,7 +362,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
           }
         });
 
-        hpx::dataflow(gemv_func, tau, A.read(index_tile_v), T(LocalTileIndex{0, 0}));
+        hpx::dataflow(gemv_func, reflector_params, A.read(index_tile_v), T(LocalTileIndex{0, 0}));
       }
 
       // std::cout << "TRMV" << std::endl;
