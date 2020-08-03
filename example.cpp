@@ -120,8 +120,6 @@ int miniapp(hpx::program_options::variables_map& vm) {
                 trace("x = ", *x_ptr);
                 trace("x0 = ", x0_and_norm.first);
 
-                tile_x(index_el_x0) = 1;  // TODO FIX THIS and remove RW from tile_x
-
                 return std::move(x0_and_norm);
               });
 
@@ -177,24 +175,19 @@ int miniapp(hpx::program_options::variables_map& vm) {
       // compute V (reflector components)
       trace("COMPUTING REFLECTOR COMPONENT");
 
-      dlaf::GlobalElementIndex
-          index_reflector{distribution.template globalElementFromLocalTileAndTileElement<
-                              Coord::Row>(Ai_start.row(), index_el_x0.row()),
-                          distribution.template globalElementFromLocalTileAndTileElement<
-                              Coord::Col>(Ai_start.col(), index_el_x0.col())};
-
-      LocalTileIndex V_second_component{distribution.template nextLocalTileFromGlobalElement<Coord::Row>(
-                                            index_reflector.row() + 1),
-                                        Ai_start.col()};
-      LocalTileSize V_size{distribution.nrTiles().rows() - V_second_component.row(), 1};
-
-      for (const LocalTileIndex& index_tile_v : iterate_range2d(V_second_component, V_size)) {
+      for (const LocalTileIndex& index_tile_v : iterate_range2d(Ai_start, Ai_size)) {
         const bool has_first_component = (index_tile_v.row() == Ai_start.row());
-        // if it contains the first component, skip it
-        const SizeType first_tile_element = has_first_component ? index_el_x0.row() + 1 : 0;
 
         auto compute_reflector_components_func =
-            unwrapping([index_el_x0, first_tile_element](const ReflectorParams& params, auto&& tile_v) {
+            unwrapping([index_el_x0, has_first_component](const ReflectorParams& params, auto&& tile_v) {
+              if (has_first_component)
+                tile_v(index_el_x0) = params.y;
+
+              const SizeType first_tile_element = has_first_component ? index_el_x0.row() + 1 : 0;
+
+              if (first_tile_element > tile_v.size().rows() - 1)
+                return;
+
               Type* v = tile_v.ptr({first_tile_element, index_el_x0.col()});
               blas::scal(tile_v.size().rows() - first_tile_element, params.factor, v, 1);
             });
@@ -216,22 +209,43 @@ int miniapp(hpx::program_options::variables_map& vm) {
           auto compute_W_func =
               unwrapping([has_first_component, index_el_x0](auto&& tile_a, auto&& tile_w) {
                 const SizeType first_element_in_tile = has_first_component ? index_el_x0.row() : 0;
-                const TileElementSize A_size{tile_a.size().rows() - first_element_in_tile,
-                                             tile_a.size().cols() - (index_el_x0.col() + 1)};
-                const TileElementIndex A_start{first_element_in_tile, index_el_x0.col() + 1};
-                const TileElementIndex V_start{first_element_in_tile, index_el_x0.col()};
+
+                TileElementIndex Pt_start{first_element_in_tile, index_el_x0.col() + 1};
+                TileElementSize Pt_size{tile_a.size().rows() - Pt_start.row(),
+                                        tile_a.size().cols() - Pt_start.col()};
+
+                TileElementIndex V_start{first_element_in_tile, index_el_x0.col()};
                 const TileElementIndex W_start{0, index_el_x0.col() + 1};
 
+                if (has_first_component) {
+                  const TileElementSize offset{1, 0};
+
+                  Type fake_v = 1;
+                  // clang-format off
+                  blas::gemv(blas::Layout::ColMajor,
+                      blas::Op::ConjTrans,
+                      offset.rows(), Pt_size.cols(),
+                      Type(1),
+                      tile_a.ptr(Pt_start), tile_a.ld(),
+                      &fake_v, 1,
+                      0,
+                      tile_w.ptr(W_start), tile_w.ld());
+                  // clang-format on
+
+                  Pt_start = Pt_start + offset;
+                  V_start = V_start + offset;
+                  Pt_size = Pt_size - offset;
+                }
+
                 // W += 1 . A* . V
-                const Type beta = has_first_component ? 0 : 1;
                 // clang-format off
                 blas::gemv(blas::Layout::ColMajor,
                     blas::Op::ConjTrans,
-                    A_size.rows(), A_size.cols(),
+                    Pt_size.rows(), Pt_size.cols(),
                     Type(1),
-                    tile_a.ptr(A_start), tile_a.ld(),
+                    tile_a.ptr(Pt_start), tile_a.ld(),
                     tile_a.ptr(V_start), 1,
-                    beta,
+                    1,
                     tile_w.ptr(W_start), tile_w.ld());
                 // clang-format on
               });
@@ -249,23 +263,40 @@ int miniapp(hpx::program_options::variables_map& vm) {
                                                                        auto&& w, auto&& tile_a) {
             const SizeType first_element_in_tile = has_first_component ? index_el_x0.row() : 0;
 
-            const TileElementSize V_size{tile_a.size().rows() - first_element_in_tile, 1};
-            const TileElementSize W_size{1, tile_a.size().cols() - (index_el_x0.col() + 1)};
-            const TileElementSize A_size{V_size.rows(), W_size.cols()};
+            TileElementIndex Pt_start{first_element_in_tile, index_el_x0.col() + 1};
+            TileElementSize Pt_size{tile_a.size().rows() - Pt_start.row(),
+                                    tile_a.size().cols() - Pt_start.col()};
 
-            const TileElementIndex A_start{first_element_in_tile, index_el_x0.col() + 1};
-            const TileElementIndex V_start{first_element_in_tile, index_el_x0.col()};
+            TileElementIndex V_start{first_element_in_tile, index_el_x0.col()};
             const TileElementIndex W_start{0, index_el_x0.col() + 1};
 
+            if (has_first_component) {
+              const TileElementSize offset{1, 0};
+
+              // Pt = Pt - tau * v[0] * w*
+              // clang-format off
+              Type fake_v = 1;
+              blas::ger(blas::Layout::ColMajor,
+                  1, Pt_size.cols(),
+                  -params.tau,
+                  &fake_v, 1,
+                  w.ptr(W_start), w.ld(),
+                  tile_a.ptr(Pt_start), tile_a.ld());
+              // clang-format on
+
+              Pt_start = Pt_start + offset;
+              V_start = V_start + offset;
+              Pt_size = Pt_size - offset;
+            }
+
             // Pt = Pt - tau * v * w*
-            const Type alpha = -params.tau;
             // clang-format off
             blas::ger(blas::Layout::ColMajor,
-                A_size.rows(), A_size.cols(),
-                alpha,
+                Pt_size.rows(), Pt_size.cols(),
+                -params.tau,
                 tile_a.ptr(V_start), 1,
                 w.ptr(W_start), w.ld(),
-                tile_a.ptr(A_start), tile_a.ld());
+                tile_a.ptr(Pt_start), tile_a.ld());
             // clang-format on
           });
 
@@ -273,9 +304,6 @@ int miniapp(hpx::program_options::variables_map& vm) {
                         A(index_tile_a));
         }
       }
-
-      // put in place the previously computed result
-      // A(Ai_start).get()(index_el_x0) = y; // TODO fix this
 
       print(A, "A = ");
 
@@ -372,22 +400,22 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
     MatrixType V0(LocalElementSize{nb, nb}, distribution.blockSize());
     auto setup_V0_func = unwrapping([](auto&& tile_a, auto&& tile_v) {
-        // clang-format off
-        lapack::lacpy(lapack::MatrixType::Lower,
-            tile_v.size().rows(), tile_v.size().cols(),
-            tile_a.ptr(), tile_a.ld(),
-            tile_v.ptr(), tile_v.ld());
-        // clang-format on
+      // clang-format off
+      lapack::lacpy(lapack::MatrixType::Lower,
+          tile_v.size().rows(), tile_v.size().cols(),
+          tile_a.ptr(), tile_a.ld(),
+          tile_v.ptr(), tile_v.ld());
+      // clang-format on
 
-        // set upper part to zero and 1 on diagonal (reflectors)
-        // clang-format off
-        lapack::laset(lapack::MatrixType::Upper,
-            tile_v.size().rows(), tile_v.size().cols(),
-            Type(0), // off diag
-            Type(1), // on  diag
-            tile_v.ptr(), tile_v.ld());
-        // clang-format on
-        });
+      // set upper part to zero and 1 on diagonal (reflectors)
+      // clang-format off
+      lapack::laset(lapack::MatrixType::Upper,
+          tile_v.size().rows(), tile_v.size().cols(),
+          Type(0), // off diag
+          Type(1), // on  diag
+          tile_v.ptr(), tile_v.ld());
+      // clang-format on
+    });
     hpx::dataflow(setup_V0_func, A.read(Ai_start), V0(LocalTileIndex{0, 0}));
 
     print(V0, "V0 = ");
@@ -425,7 +453,8 @@ int miniapp(hpx::program_options::variables_map& vm) {
         // clang-format on
       });
 
-      hpx::shared_future<ConstTileType> tile_v = is_diagonal_tile ? V0.read(LocalTileIndex{0, 0}) : A.read(index_tile_v);
+      hpx::shared_future<ConstTileType> tile_v =
+          is_diagonal_tile ? V0.read(LocalTileIndex{0, 0}) : A.read(index_tile_v);
       hpx::dataflow(trmm_func, tile_v, T.read(LocalTileIndex{0, 0}), W(index_tile_w));
     }
 
@@ -559,7 +588,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
       });
 
       auto tile_v = is_diagonal_tile ? V0.read(LocalTileIndex{0, 0}) : A.read(index_tile_v);
-      auto tile_w2 = T(LocalTileIndex{0, 0}); // W2 is stored in T
+      auto tile_w2 = T(LocalTileIndex{0, 0});  // W2 is stored in T
 
       hpx::dataflow(gemm_func, tile_v, tile_w2, X(index_tile_x));
     }
