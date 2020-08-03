@@ -57,29 +57,6 @@ struct ReflectorParams {
 void print(ConstMatrixType& matrix, std::string prefix = "");
 void print_tile(const ConstTileType& tile);
 
-auto setup_v_func = hpx::util::unwrapping([](const ConstTileType& tile_v) -> ConstTileType {
-  MemoryViewType mem_view(dlaf::util::size_t::mul(tile_v.size().rows(), tile_v.size().cols()));
-  TileType tile_tmp(tile_v.size(), std::move(mem_view), tile_v.size().rows());
-
-  // clang-format off
-  lapack::lacpy(lapack::MatrixType::Lower,
-      tile_v.size().rows(), tile_v.size().cols(),
-      tile_v.ptr(), tile_v.ld(),
-      tile_tmp.ptr(), tile_tmp.ld());
-  // clang-format on
-
-  // set upper part to zero and 1 on diagonal (reflectors)
-  // clang-format off
-  lapack::laset(lapack::MatrixType::Upper,
-      tile_tmp.size().rows(), tile_tmp.size().cols(),
-      Type(0), // off diag
-      Type(1), // on  diag
-      tile_tmp.ptr(), tile_tmp.ld());
-  // clang-format on
-
-  return ConstTileType(std::move(tile_tmp));
-});
-
 int miniapp(hpx::program_options::variables_map& vm) {
   const SizeType n = vm["matrix-rows"].as<SizeType>();
   const SizeType nb = vm["block-size"].as<SizeType>();
@@ -393,6 +370,28 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
     print(T, "T = ");
 
+    MatrixType V0(LocalElementSize{nb, nb}, distribution.blockSize());
+    auto setup_V0_func = unwrapping([](auto&& tile_a, auto&& tile_v) {
+        // clang-format off
+        lapack::lacpy(lapack::MatrixType::Lower,
+            tile_v.size().rows(), tile_v.size().cols(),
+            tile_a.ptr(), tile_a.ld(),
+            tile_v.ptr(), tile_v.ld());
+        // clang-format on
+
+        // set upper part to zero and 1 on diagonal (reflectors)
+        // clang-format off
+        lapack::laset(lapack::MatrixType::Upper,
+            tile_v.size().rows(), tile_v.size().cols(),
+            Type(0), // off diag
+            Type(1), // on  diag
+            tile_v.ptr(), tile_v.ld());
+        // clang-format on
+        });
+    hpx::dataflow(setup_V0_func, A.read(Ai_start), V0(LocalTileIndex{0, 0}));
+
+    print(V0, "V0 = ");
+
     // TODO UPDATE TRAILING MATRIX
     trace(">>> UPDATE TRAILING MATRIX");
     trace(">>> At ", At_size, At_start);
@@ -407,28 +406,14 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
       const bool is_diagonal_tile = index_tile_v.row() == At_start.row();
 
-      auto copy_v_func = unwrapping([is_diagonal_tile](auto&& tile_w, auto&& tile_v) {
+      auto trmm_func = unwrapping([](auto&& tile_v, auto&& tile_t, auto&& tile_w) {
         // clang-format off
-        lapack::lacpy(is_diagonal_tile ? lapack::MatrixType::Lower : lapack::MatrixType::General,
+        lapack::lacpy(lapack::MatrixType::General,
             tile_v.size().rows(), tile_v.size().cols(),
             tile_v.ptr(), tile_v.ld(),
             tile_w.ptr(), tile_w.ld());
         // clang-format on
 
-        if (is_diagonal_tile) {  // is this the first one? (diagonal)
-          trace("setting V on W");
-          // set upper part to zero and 1 on diagonal (reflectors)
-          // clang-format off
-          lapack::laset(lapack::MatrixType::Upper,
-              tile_w.size().rows(), tile_w.size().cols(),
-              Type(0), // off diag
-              Type(1), // on  diag
-              tile_w.ptr(), tile_w.ld());
-          // clang-format on
-        }
-      });
-
-      auto trmm_func = unwrapping([](auto&& tile_t, auto&& tile_w) {
         // W = V . T
         // clang-format off
         blas::trmm(blas::Layout::ColMajor,
@@ -440,8 +425,8 @@ int miniapp(hpx::program_options::variables_map& vm) {
         // clang-format on
       });
 
-      hpx::dataflow(copy_v_func, W(index_tile_w), A.read(index_tile_v));
-      hpx::dataflow(trmm_func, T.read(LocalTileIndex{0, 0}), W(index_tile_w));
+      hpx::shared_future<ConstTileType> tile_v = is_diagonal_tile ? V0.read(LocalTileIndex{0, 0}) : A.read(index_tile_v);
+      hpx::dataflow(trmm_func, tile_v, T.read(LocalTileIndex{0, 0}), W(index_tile_w));
     }
 
     print(W, "W = ");
@@ -558,11 +543,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
       trace("UPDATING X", index_tile_x, "V", index_tile_v);
 
-      hpx::shared_future<ConstTileType> fut_tile_v = A.read(index_tile_v);
-
       const bool is_diagonal_tile = (Ai_start.row() == index_tile_v.row());
-      if (is_diagonal_tile)
-        fut_tile_v = fut_tile_v.then(setup_v_func);
 
       auto gemm_func = unwrapping([](auto&& tile_v, auto&& tile_w2, auto&& tile_x) {
         // clang-format off
@@ -577,8 +558,10 @@ int miniapp(hpx::program_options::variables_map& vm) {
         // clang-format on
       });
 
-      // W2 is stored in T
-      hpx::dataflow(gemm_func, fut_tile_v, T(LocalTileIndex{0, 0}), X(index_tile_x));
+      auto tile_v = is_diagonal_tile ? V0.read(LocalTileIndex{0, 0}) : A.read(index_tile_v);
+      auto tile_w2 = T(LocalTileIndex{0, 0}); // W2 is stored in T
+
+      hpx::dataflow(gemm_func, tile_v, tile_w2, X(index_tile_x));
     }
 
     print(X, "X = ");
@@ -597,11 +580,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
           const LocalTileIndex index_tile_v{index_tile_at.row(), Ai_start.col()};
           const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
 
-          hpx::shared_future<ConstTileType> fut_tile_v = A.read(index_tile_v);
-
           const bool is_first_reflector_tile = (Ai_start.row() == index_tile_v.row());
-          if (is_first_reflector_tile)
-            fut_tile_v = fut_tile_v.then(setup_v_func);
 
           auto her2k_func = unwrapping([](auto&& tile_v, auto&& tile_x, auto&& tile_at) {
             // clang-format off
@@ -616,7 +595,8 @@ int miniapp(hpx::program_options::variables_map& vm) {
             // clang-format on
           });
 
-          hpx::dataflow(her2k_func, fut_tile_v, X.read(index_tile_x), A(index_tile_at));
+          auto tile_v = is_first_reflector_tile ? V0.read(LocalTileIndex{0, 0}) : A.read(index_tile_v);
+          hpx::dataflow(her2k_func, tile_v, X.read(index_tile_x), A(index_tile_at));
         }
         else {
           trace("double gemm");
@@ -625,11 +605,8 @@ int miniapp(hpx::program_options::variables_map& vm) {
           {
             const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
             const LocalTileIndex index_tile_v{index_tile_at.col(), Ai_start.col()};
-            hpx::shared_future<ConstTileType> fut_tile_v = A.read(index_tile_v);
 
             const bool is_first_reflector_tile = (Ai_start.row() == index_tile_v.row());
-            if (is_first_reflector_tile)
-              fut_tile_v = fut_tile_v.then(setup_v_func);
 
             auto gemm_a_func = unwrapping([](auto&& tile_x, auto&& tile_v, auto&& tile_at) {
               // clang-format off
@@ -644,18 +621,15 @@ int miniapp(hpx::program_options::variables_map& vm) {
               // clang-format on
             });
 
-            hpx::dataflow(gemm_a_func, X.read(index_tile_x), fut_tile_v, A(index_tile_at));
+            auto tile_v = is_first_reflector_tile ? V0.read(LocalTileIndex{0, 0}) : A.read(index_tile_v);
+            hpx::dataflow(gemm_a_func, X.read(index_tile_x), tile_v, A(index_tile_at));
           }
 
           {
             const LocalTileIndex index_tile_v{index_tile_at.row(), Ai_start.col()};
             const LocalTileIndex index_tile_x{index_tile_at.col() - At_start.row(), 0};
 
-            hpx::shared_future<ConstTileType> fut_tile_v = A.read(index_tile_v);
-
             const bool is_first_reflector_tile = (Ai_start.row() == index_tile_v.row());
-            if (is_first_reflector_tile)
-              fut_tile_v = fut_tile_v.then(setup_v_func);
 
             auto gemm_b_func = unwrapping([](auto&& tile_v, auto&& tile_x, auto&& tile_at) {
               // clang-format off
@@ -670,7 +644,8 @@ int miniapp(hpx::program_options::variables_map& vm) {
               // clang-format on
             });
 
-            hpx::dataflow(gemm_b_func, fut_tile_v, X.read(index_tile_x), A(index_tile_at));
+            auto tile_v = is_first_reflector_tile ? V0.read(LocalTileIndex{0, 0}) : A.read(index_tile_v);
+            hpx::dataflow(gemm_b_func, tile_v, X.read(index_tile_x), A(index_tile_at));
           }
         }
       }
