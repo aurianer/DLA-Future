@@ -212,7 +212,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
                 TileElementIndex Pt_start{first_element_in_tile, index_el_x0.col() + 1};
                 TileElementSize Pt_size{tile_a.size().rows() - Pt_start.row(),
-                                              tile_a.size().cols() - Pt_start.col()};
+                                        tile_a.size().cols() - Pt_start.col()};
 
                 TileElementIndex V_start{first_element_in_tile, index_el_x0.col()};
                 const TileElementIndex W_start{0, index_el_x0.col() + 1};
@@ -265,7 +265,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
             TileElementIndex Pt_start{first_element_in_tile, index_el_x0.col() + 1};
             TileElementSize Pt_size{tile_a.size().rows() - Pt_start.row(),
-                                          tile_a.size().cols() - Pt_start.col()};
+                                    tile_a.size().cols() - Pt_start.col()};
 
             TileElementIndex V_start{first_element_in_tile, index_el_x0.col()};
             const TileElementIndex W_start{0, index_el_x0.col() + 1};
@@ -400,22 +400,22 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
     MatrixType V0(LocalElementSize{nb, nb}, distribution.blockSize());
     auto setup_V0_func = unwrapping([](auto&& tile_a, auto&& tile_v) {
-        // clang-format off
-        lapack::lacpy(lapack::MatrixType::Lower,
-            tile_v.size().rows(), tile_v.size().cols(),
-            tile_a.ptr(), tile_a.ld(),
-            tile_v.ptr(), tile_v.ld());
-        // clang-format on
+      // clang-format off
+      lapack::lacpy(lapack::MatrixType::Lower,
+          tile_v.size().rows(), tile_v.size().cols(),
+          tile_a.ptr(), tile_a.ld(),
+          tile_v.ptr(), tile_v.ld());
+      // clang-format on
 
-        // set upper part to zero and 1 on diagonal (reflectors)
-        // clang-format off
-        lapack::laset(lapack::MatrixType::Upper,
-            tile_v.size().rows(), tile_v.size().cols(),
-            Type(0), // off diag
-            Type(1), // on  diag
-            tile_v.ptr(), tile_v.ld());
-        // clang-format on
-        });
+      // set upper part to zero and 1 on diagonal (reflectors)
+      // clang-format off
+      lapack::laset(lapack::MatrixType::Upper,
+          tile_v.size().rows(), tile_v.size().cols(),
+          Type(0), // off diag
+          Type(1), // on  diag
+          tile_v.ptr(), tile_v.ld());
+      // clang-format on
+    });
     hpx::dataflow(setup_V0_func, A.read(Ai_start), V0(LocalTileIndex{0, 0}));
 
     print(V0, "V0 = ");
@@ -453,7 +453,8 @@ int miniapp(hpx::program_options::variables_map& vm) {
         // clang-format on
       });
 
-      hpx::shared_future<ConstTileType> tile_v = is_diagonal_tile ? V0.read(LocalTileIndex{0, 0}) : A.read(index_tile_v);
+      hpx::shared_future<ConstTileType> tile_v =
+          is_diagonal_tile ? V0.read(LocalTileIndex{0, 0}) : A.read(index_tile_v);
       hpx::dataflow(trmm_func, tile_v, T.read(LocalTileIndex{0, 0}), W(index_tile_w));
     }
 
@@ -587,7 +588,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
       });
 
       auto tile_v = is_diagonal_tile ? V0.read(LocalTileIndex{0, 0}) : A.read(index_tile_v);
-      auto tile_w2 = T(LocalTileIndex{0, 0}); // W2 is stored in T
+      auto tile_w2 = T(LocalTileIndex{0, 0});  // W2 is stored in T
 
       hpx::dataflow(gemm_func, tile_v, tile_w2, X(index_tile_x));
     }
