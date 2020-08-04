@@ -78,7 +78,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
   // for each panel
   const LocalTileSize A_size = distribution.localNrTiles();
-  for (SizeType j_panel = 0; j_panel < A_size.cols() && (j_panel + 1) < A_size.rows(); ++j_panel) {
+  for (SizeType j_panel = 0; j_panel < (A_size.cols() - 1); ++j_panel) {
     const LocalTileIndex Ai_start{j_panel + 1, j_panel};
     const LocalTileSize Ai_size{distribution.nrTiles().rows() - Ai_start.row(), 1};
 
@@ -86,7 +86,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
     const LocalTileSize At_size{Ai_size.rows(), A.nrTiles().cols() - (Ai_start.col() + 1)};
 
     trace(">>> COMPUTING panel");
-    trace(">>> Ai ", Ai_size, Ai_start);
+    trace(">>> Ai", Ai_size, Ai_start);
 
     MatrixType T(LocalElementSize{nb, nb}, distribution.blockSize());
     dlaf::matrix::util::set(T, [](auto&&) { return 0; });
