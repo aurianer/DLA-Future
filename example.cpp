@@ -370,12 +370,6 @@ int miniapp(hpx::program_options::variables_map& vm) {
         hpx::dataflow(gemv_func, reflector_params, A.read(index_tile_v), T(LocalTileIndex{0, 0}));
       }
 
-      // std::cout << "TRMV" << std::endl;
-      // for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
-      //  std::cout << "t[" << i_loc << "] " << tile_t({i_loc, index_el_x0.col()}) << std::endl;
-
-      // std::cout << tile_t(T_start) << " " << tile_t({0, 0}) << std::endl;
-
       auto trmv_func = unwrapping([T_start, index_el_x0](auto&& tile_t) {
         // t = T . t
         // clang-format off
@@ -388,12 +382,6 @@ int miniapp(hpx::program_options::variables_map& vm) {
       });
 
       hpx::dataflow(trmv_func, T(LocalTileIndex{0, 0}));
-
-      // for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
-      //  std::cout << "t[" << i_loc << "] " << tile_t({i_loc, index_el_x0.col()}) << std::endl;
-
-      // std::cout << "T(partial) = ";
-      // print(T);
     }
 
     print(T, "T = ");
