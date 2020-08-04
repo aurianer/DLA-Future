@@ -415,7 +415,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
     MatrixType W({Ai_size.rows() * nb, nb}, distribution.blockSize());
     // TODO TRMM W = V . T
     for (SizeType i_t = At_start.row(); i_t < distribution.nrTiles().rows(); ++i_t) {
-      const LocalTileIndex index_tile_v{i_t, j_panel};
+      const LocalTileIndex index_tile_v{i_t, Ai_start.col()};
       const LocalTileIndex index_tile_w{i_t - At_start.row(), 0};
 
       trace("COMPUTING W", index_tile_w, "with V", index_tile_v);
