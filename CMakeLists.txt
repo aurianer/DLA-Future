@@ -105,3 +105,6 @@ endif()
 
 add_executable(example example.cpp)
 target_link_libraries(example PRIVATE DLAF)
+
+add_executable(example_dist example_dist.cpp)
+target_link_libraries(example_dist PRIVATE DLAF)
