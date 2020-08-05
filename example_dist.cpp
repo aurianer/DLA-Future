@@ -4,17 +4,20 @@
 #include <hpx/hpx.hpp>
 #include <hpx/hpx_init.hpp>
 
-#include "dlaf/communication/init.h"
 #include "dlaf/common/index2d.h"
+#include "dlaf/common/pipeline.h"
 #include "dlaf/common/range2d.h"
+#include "dlaf/common/vector.h"
 #include "dlaf/communication/communicator_grid.h"
 #include "dlaf/communication/functions_sync.h"
+#include "dlaf/communication/init.h"
+#include "dlaf/communication/sync/broadcast.h"
+#include "dlaf/communication/sync/reduce.h"
 #include "dlaf/lapack_tile.h"
 #include "dlaf/matrix.h"
 #include "dlaf/matrix/index.h"
 #include "dlaf/types.h"
 #include "dlaf/util_matrix.h"
-#include "dlaf/common/pipeline.h"
 
 using Type = double;
 
@@ -65,7 +68,6 @@ struct ReflectorParams {
 };
 
 void print(ConstMatrixType& matrix, std::string prefix = "");
-void print_tile(const ConstTileType& tile);
 
 int miniapp(hpx::program_options::variables_map& vm) {
   const SizeType n = vm["matrix-rows"].as<SizeType>();
@@ -86,41 +88,45 @@ int miniapp(hpx::program_options::variables_map& vm) {
   const auto& dist = A.distribution();
   const auto rank = dist.rankIndex();
 
-  print(A, "A = ");
+  print(A, "A");
   trace(A);
   trace(A.distribution().localNrTiles());
 
   dlaf::common::Pipeline<CommunicatorGrid> serial_comm(std::move(comm_grid));
 
   using dlaf::common::iterate_range2d;
+  using dlaf::common::make_data;
   using hpx::util::unwrapping;
 
+  using namespace dlaf::comm::sync;
+
   // for each reflector panel
-  const GlobalTileSize A_size = dist.nrTiles();
-  for (SizeType j_panel = 0; j_panel < (A_size.cols() - 1); ++j_panel) {
+  for (SizeType j_panel = 0; j_panel < (dist.nrTiles().cols() - 1); ++j_panel) {
     MatrixType T(LocalElementSize{nb, nb}, dist.blockSize());
     dlaf::matrix::util::set(T, [](auto&&) { return 0; });
 
-    MatrixType V0(LocalElementSize{nb, nb}, dist.blockSize()); // used just by the owner
+    MatrixType V0(LocalElementSize{nb, nb}, dist.blockSize());  // used just by the owner
 
     const SizeType rank_panel_col = dist.rankGlobalTile<Coord::Col>(j_panel);
 
     const dlaf::GlobalTileIndex Ai_start_global{j_panel + 1, j_panel};
+    const dlaf::GlobalTileIndex At_start_global = Ai_start_global + GlobalTileSize{0, 1};
+
     const auto rank_v0 = dist.rankGlobalTile(Ai_start_global);
 
-    const LocalTileIndex Ai_start { //{j_panel + 1, j_panel};
-      dist.nextLocalTileFromGlobalTile<Coord::Row>(Ai_start_global.row()),
-      dist.nextLocalTileFromGlobalTile<Coord::Col>(Ai_start_global.col()),
+    const LocalTileIndex Ai_start{
+        dist.nextLocalTileFromGlobalTile<Coord::Row>(Ai_start_global.row()),
+        dist.nextLocalTileFromGlobalTile<Coord::Col>(Ai_start_global.col()),
     };
     const LocalTileSize Ai_size{dist.localNrTiles().rows() - Ai_start.row(), 1};
 
     const LocalTileIndex At_start{
-      Ai_start.row(),
-      dist.nextLocalTileFromGlobalTile<Coord::Col>(Ai_start.col() + 1),
+        Ai_start.row(),
+        dist.nextLocalTileFromGlobalTile<Coord::Col>(At_start_global.col()),
     };
-    const LocalTileSize At_size{Ai_size.rows(), dist.localNrTiles().cols() - (Ai_start.col() + 1)};
+    const LocalTileSize At_size{Ai_size.rows(), dist.localNrTiles().cols() - At_start.col()};
 
-    if (rank.col() == rank_panel_col) { // if this rank is part of the reflector panel
+    if (rank.col() == rank_panel_col) {  // if this rank is part of the reflector panel
       trace(">>> COMPUTING panel");
       trace(">>> Ai", Ai_size, Ai_start);
 
@@ -156,8 +162,8 @@ int miniapp(hpx::program_options::variables_map& vm) {
                   return std::move(x0_and_norm);
                 });
 
-            fut_x0_and_partial_norm =
-                hpx::dataflow(compute_x0_and_partial_norm_func, A(index_tile_x), fut_x0_and_partial_norm);
+            fut_x0_and_partial_norm = hpx::dataflow(compute_x0_and_partial_norm_func, A(index_tile_x),
+                                                    fut_x0_and_partial_norm);
           }
           else {
             auto compute_partial_norm_func =
@@ -211,8 +217,8 @@ int miniapp(hpx::program_options::variables_map& vm) {
         for (const LocalTileIndex& index_tile_v : iterate_range2d(Ai_start, Ai_size)) {
           const bool has_first_component = (index_tile_v.row() == Ai_start.row());
 
-          auto compute_reflector_components_func =
-              unwrapping([index_el_x0, has_first_component](const ReflectorParams& params, auto&& tile_v) {
+          auto compute_reflector_components_func = unwrapping(
+              [index_el_x0, has_first_component](const ReflectorParams& params, auto&& tile_v) {
                 if (has_first_component)
                   tile_v(index_el_x0) = params.y;
 
@@ -285,60 +291,60 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
             hpx::dataflow(compute_W_func, A.read(index_tile_a), W(LocalTileIndex{0, 0}));
           }
-          print(W, "W = ");
+          print(W, "W");
 
           // update trailing panel
           for (const LocalTileIndex& index_tile_a : iterate_range2d(Ai_start, Ai_size)) {
             const bool has_first_component = (index_tile_a.row() == Ai_start.row());
 
-            auto apply_reflector_func = unwrapping([index_el_x0,
-                                                    has_first_component](const ReflectorParams& params,
-                                                                         auto&& w, auto&& tile_a) {
-              const SizeType first_element_in_tile = has_first_component ? index_el_x0.row() : 0;
+            auto apply_reflector_func =
+                unwrapping([index_el_x0, has_first_component](const ReflectorParams& params,
+                                                              auto&& tile_w, auto&& tile_a) {
+                  const SizeType first_element_in_tile = has_first_component ? index_el_x0.row() : 0;
 
-              TileElementIndex Pt_start{first_element_in_tile, index_el_x0.col() + 1};
-              TileElementSize Pt_size{tile_a.size().rows() - Pt_start.row(),
-                                      tile_a.size().cols() - Pt_start.col()};
+                  TileElementIndex Pt_start{first_element_in_tile, index_el_x0.col() + 1};
+                  TileElementSize Pt_size{tile_a.size().rows() - Pt_start.row(),
+                                          tile_a.size().cols() - Pt_start.col()};
 
-              TileElementIndex V_start{first_element_in_tile, index_el_x0.col()};
-              const TileElementIndex W_start{0, index_el_x0.col() + 1};
+                  TileElementIndex V_start{first_element_in_tile, index_el_x0.col()};
+                  const TileElementIndex W_start{0, index_el_x0.col() + 1};
 
-              if (has_first_component) {
-                const TileElementSize offset{1, 0};
+                  if (has_first_component) {
+                    const TileElementSize offset{1, 0};
 
-                // Pt = Pt - tau * v[0] * w*
-                // clang-format off
-                Type fake_v = 1;
-                blas::ger(blas::Layout::ColMajor,
-                    1, Pt_size.cols(),
-                    -params.tau,
-                    &fake_v, 1,
-                    w.ptr(W_start), w.ld(),
-                    tile_a.ptr(Pt_start), tile_a.ld());
-                // clang-format on
+                    // Pt = Pt - tau * v[0] * w*
+                    // clang-format off
+                    Type fake_v = 1;
+                    blas::ger(blas::Layout::ColMajor,
+                        1, Pt_size.cols(),
+                        -params.tau,
+                        &fake_v, 1,
+                        tile_w.ptr(W_start), tile_w.ld(),
+                        tile_a.ptr(Pt_start), tile_a.ld());
+                    // clang-format on
 
-                Pt_start = Pt_start + offset;
-                V_start = V_start + offset;
-                Pt_size = Pt_size - offset;
-              }
+                    Pt_start = Pt_start + offset;
+                    V_start = V_start + offset;
+                    Pt_size = Pt_size - offset;
+                  }
 
-              // Pt = Pt - tau * v * w*
-              // clang-format off
-              blas::ger(blas::Layout::ColMajor,
-                  Pt_size.rows(), Pt_size.cols(),
-                  -params.tau,
-                  tile_a.ptr(V_start), 1,
-                  w.ptr(W_start), w.ld(),
-                  tile_a.ptr(Pt_start), tile_a.ld());
-              // clang-format on
-            });
+                  // Pt = Pt - tau * v * w*
+                  // clang-format off
+                  blas::ger(blas::Layout::ColMajor,
+                      Pt_size.rows(), Pt_size.cols(),
+                      -params.tau,
+                      tile_a.ptr(V_start), 1,
+                      tile_w.ptr(W_start), tile_w.ld(),
+                      tile_a.ptr(Pt_start), tile_a.ld());
+                  // clang-format on
+                });
 
             hpx::dataflow(apply_reflector_func, reflector_params, W(LocalTileIndex{0, 0}),
                           A(index_tile_a));
           }
         }
 
-        print(A, "A = ");
+        print(A, "A");
 
         // TODO compute T-factor component for this reflector
 
@@ -351,55 +357,56 @@ int miniapp(hpx::program_options::variables_map& vm) {
           const bool has_first_component = (index_tile_v.row() == Ai_start.row());
           // skip the first component, becuase it should be 1, but it is not
 
-          auto gemv_func = unwrapping([T_start, T_size, has_first_component,
-                                       index_el_x0](const ReflectorParams& params, auto&& tile_v,
-                                                    auto&& tile_t) {
-            const Type tau = params.tau;
+          auto gemv_func =
+              unwrapping([T_start, T_size, has_first_component,
+                          index_el_x0](const ReflectorParams& params, auto&& tile_v, auto&& tile_t) {
+                const Type tau = params.tau;
 
-            const SizeType first_element_in_tile = has_first_component ? index_el_x0.row() + 1 : 0;
+                const SizeType first_element_in_tile = has_first_component ? index_el_x0.row() + 1 : 0;
 
-            // T(0:j, j) = -tau . V(j:, 0:j)* . V(j:, j)
-            // [j x 1] = [(n-j) x j]* . [(n-j) x 1]
-            const TileElementSize V_size{tile_v.size().rows() - first_element_in_tile, index_el_x0.col()};
-            const TileElementIndex Va_start{first_element_in_tile, 0};
-            const TileElementIndex Vb_start{first_element_in_tile, index_el_x0.col()};
+                // T(0:j, j) = -tau . V(j:, 0:j)* . V(j:, j)
+                // [j x 1] = [(n-j) x j]* . [(n-j) x 1]
+                const TileElementSize V_size{tile_v.size().rows() - first_element_in_tile,
+                                             index_el_x0.col()};
+                const TileElementIndex Va_start{first_element_in_tile, 0};
+                const TileElementIndex Vb_start{first_element_in_tile, index_el_x0.col()};
 
-            // set tau on the diagonal
-            if (has_first_component) {
-              trace("t on diagonal", tau);
-              tile_t(index_el_x0) = tau;
+                // set tau on the diagonal
+                if (has_first_component) {
+                  trace("t on diagonal", tau);
+                  tile_t(index_el_x0) = tau;
 
-              // compute first component with implicit one
-              for (const auto& index_el_t : iterate_range2d(T_start, T_size)) {
-                const auto index_el_va = dlaf::common::internal::transposed(index_el_t);
-                tile_t(index_el_t) = -tau * tile_v(index_el_va);
+                  // compute first component with implicit one
+                  for (const auto& index_el_t : iterate_range2d(T_start, T_size)) {
+                    const auto index_el_va = dlaf::common::internal::transposed(index_el_t);
+                    tile_t(index_el_t) = -tau * tile_v(index_el_va);
 
-                trace(tile_t(index_el_t), -tau, tile_v(index_el_va));
-              }
-            }
+                    trace(tile_t(index_el_t), -tau, tile_v(index_el_va));
+                  }
+                }
 
-            if (Va_start.row() < tile_v.size().rows() && Vb_start.row() < tile_v.size().rows()) {
-              trace("GEMV", Va_start, V_size, Vb_start);
-              for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
-                trace("t[", i_loc, "]", tile_t({i_loc, index_el_x0.col()}));
+                if (Va_start.row() < tile_v.size().rows() && Vb_start.row() < tile_v.size().rows()) {
+                  trace("GEMV", Va_start, V_size, Vb_start);
+                  for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
+                    trace("t[", i_loc, "]", tile_t({i_loc, index_el_x0.col()}));
 
-              // t = -tau . V* . V
-              const Type alpha = -tau;
-              const Type beta = 1;
-              // clang-format off
-              blas::gemv(blas::Layout::ColMajor,
-                  blas::Op::ConjTrans,
-                  V_size.rows(), V_size.cols(),
-                  alpha,
-                  tile_v.ptr(Va_start), tile_v.ld(),
-                  tile_v.ptr(Vb_start), 1,
-                  beta, tile_t.ptr(T_start), 1);
-              // clang-format on
+                  // t = -tau . V* . V
+                  const Type alpha = -tau;
+                  const Type beta = 1;
+                  // clang-format off
+                  blas::gemv(blas::Layout::ColMajor,
+                      blas::Op::ConjTrans,
+                      V_size.rows(), V_size.cols(),
+                      alpha,
+                      tile_v.ptr(Va_start), tile_v.ld(),
+                      tile_v.ptr(Vb_start), 1,
+                      beta, tile_t.ptr(T_start), 1);
+                  // clang-format on
 
-              for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
-                trace("t*[", i_loc, "] ", tile_t({i_loc, index_el_x0.col()}));
-            }
-          });
+                  for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
+                    trace("t*[", i_loc, "] ", tile_t({i_loc, index_el_x0.col()}));
+                }
+              });
 
           hpx::dataflow(gemv_func, reflector_params, A.read(index_tile_v), T(LocalTileIndex{0, 0}));
         }
@@ -439,28 +446,70 @@ int miniapp(hpx::program_options::variables_map& vm) {
         });
         hpx::dataflow(setup_V0_func, A.read(Ai_start), V0(LocalTileIndex{0, 0}));
 
-        print(V0, "V0 = ");
+        print(V0, "V0");
       }
     }
 
     // communicate T row-wise
-    if (rank.col() == rank_panel_col) { // owner
+    if (rank.col() == rank_panel_col) {  // owner
       // TODO Avoid useless communication
       if (comm_grid.size().cols() > 1) {
-        auto send_bcast_f = unwrapping([](auto&& tile, auto&& comm_wrapper) {
-            dlaf::comm::sync::broadcast::send(comm_wrapper().rowCommunicator(), tile);
+        auto send_bcast_f = unwrapping([](auto&& tile_t, auto&& comm_wrapper) {
+          broadcast::send(comm_wrapper().rowCommunicator(), tile_t);
         });
         hpx::dataflow(send_bcast_f, T.read(LocalTileIndex{0, 0}), serial_comm());
       }
     }
     else {
-      auto recv_bcast_f = unwrapping([rank = rank.col()](auto&& tile_t, auto&& comm_wrapper) {
-          dlaf::comm::sync::broadcast::receive_from(rank, comm_wrapper().rowCommunicator(), tile_t);
+      auto recv_bcast_f = unwrapping([rank_panel_col](auto&& tile_t, auto&& comm_wrapper) {
+        broadcast::receive_from(rank_panel_col, comm_wrapper().rowCommunicator(), tile_t);
       });
       hpx::dataflow(recv_bcast_f, T(LocalTileIndex{0, 0}), serial_comm());
     }
 
-    print(T, "T = ");
+    print(T, "T");
+
+    // communicate V row-wise
+    MatrixType V({Ai_size.rows() * nb, Ai_size.cols() * nb}, dist.blockSize());
+    dlaf::common::internal::vector<hpx::shared_future<ConstTileType>> V_futures;
+    V_futures.reserve(Ai_size.rows());
+
+    auto get_reflector_row = [Ai_start](const LocalTileIndex& index) {
+      return index.row() - Ai_start.row();
+    };
+
+    if (rank.col() == rank_panel_col) {  // owner
+      // TODO Avoid useless communication
+      auto send_bcast_f = unwrapping([](auto&& tile_v, auto&& comm_wrapper) {
+        broadcast::send(comm_wrapper().rowCommunicator(), tile_v);
+      });
+
+      for (const LocalTileIndex& index_tile_v : iterate_range2d(Ai_start, Ai_size)) {
+        const SizeType index_tile_v_global =
+            dist.globalTileFromLocalTile<Coord::Row>(index_tile_v.row());
+
+        const bool is_first = (index_tile_v_global == Ai_start_global.row());
+        hpx::shared_future<ConstTileType> tile_v =
+            is_first ? V0.read(LocalTileIndex{0, 0}) : A.read(index_tile_v);
+        hpx::dataflow(send_bcast_f, tile_v, serial_comm());
+
+        V_futures.push_back(tile_v);
+      }
+    }
+    else {
+      auto recv_bcast_f = unwrapping([rank_panel_col](auto&& tile_v, auto&& comm_wrapper) {
+        broadcast::receive_from(rank_panel_col, comm_wrapper().rowCommunicator(), tile_v);
+      });
+
+      for (const LocalTileIndex& index_tile_v : iterate_range2d(LocalTileIndex{0, 0}, Ai_size)) {
+        hpx::dataflow(recv_bcast_f, V(index_tile_v), serial_comm());
+
+        V_futures.push_back(V.read(index_tile_v));
+      }
+    }
+
+    if (rank.col() != rank_panel_col)
+      print(V, "V");
 
     // TODO UPDATE TRAILING MATRIX
     trace(">>> UPDATE TRAILING MATRIX");
@@ -468,51 +517,70 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
     MatrixType W({Ai_size.rows() * nb, nb}, dist.blockSize());
     // TODO TRMM W = V . T
-    for (SizeType i_t = At_start.row(); i_t < dist.nrTiles().rows(); ++i_t) {
-      const LocalTileIndex index_tile_v{i_t, Ai_start.col()};
-      const LocalTileIndex index_tile_w{i_t - At_start.row(), 0};
+    if (rank.col() == rank_panel_col) {
+      for (SizeType i_t = At_start.row(); i_t < dist.localNrTiles().rows(); ++i_t) {
+        const LocalTileIndex index_tile_v{i_t, Ai_start.col()};
+        const LocalTileIndex index_tile_w{i_t - At_start.row(), 0};
 
-      trace("COMPUTING W", index_tile_w, "with V", index_tile_v);
+        trace("COMPUTING W", index_tile_w, "with V", index_tile_v);
 
-      const bool is_diagonal_tile = index_tile_v.row() == At_start.row();
+        auto trmm_func = unwrapping([](auto&& tile_v, auto&& tile_t, auto&& tile_w) {
+          // clang-format off
+          lapack::lacpy(lapack::MatrixType::General,
+              tile_v.size().rows(), tile_v.size().cols(),
+              tile_v.ptr(), tile_v.ld(),
+              tile_w.ptr(), tile_w.ld());
+          // clang-format on
 
-      auto trmm_func = unwrapping([](auto&& tile_v, auto&& tile_t, auto&& tile_w) {
-        // clang-format off
-        lapack::lacpy(lapack::MatrixType::General,
-            tile_v.size().rows(), tile_v.size().cols(),
-            tile_v.ptr(), tile_v.ld(),
-            tile_w.ptr(), tile_w.ld());
-        // clang-format on
+          // W = V . T
+          // clang-format off
+          blas::trmm(blas::Layout::ColMajor,
+              blas::Side::Right, blas::Uplo::Upper, blas::Op::NoTrans, blas::Diag::NonUnit,
+              tile_w.size().rows(), tile_w.size().cols(),
+              Type(1),
+              tile_t.ptr(), tile_t.ld(),
+              tile_w.ptr(), tile_w.ld());
+          // clang-format on
+        });
 
-        // W = V . T
-        // clang-format off
-        blas::trmm(blas::Layout::ColMajor,
-            blas::Side::Right, blas::Uplo::Upper, blas::Op::NoTrans, blas::Diag::NonUnit,
-            tile_w.size().rows(), tile_w.size().cols(),
-            Type(1),
-            tile_t.ptr(), tile_t.ld(),
-            tile_w.ptr(), tile_w.ld());
-        // clang-format on
+        hpx::dataflow(trmm_func, V_futures[get_reflector_row(index_tile_v)],
+                      T.read(LocalTileIndex{0, 0}), W(index_tile_w));
+      }
+
+      // TODO ALL REDUCE (multiple rows)
+      // TODO bcast just if needed (multiple columns/rows)
+      auto send_bcast_f = unwrapping([](auto&& tile_w, auto&& comm_wrapper) {
+        broadcast::send(comm_wrapper().rowCommunicator(), tile_w);
       });
 
-      hpx::shared_future<ConstTileType> tile_v =
-          is_diagonal_tile ? V0.read(LocalTileIndex{0, 0}) : A.read(index_tile_v);
-      hpx::dataflow(trmm_func, tile_v, T.read(LocalTileIndex{0, 0}), W(index_tile_w));
+      for (const dlaf::GlobalTileIndex& index_tile_w : iterate_range2d(W.nrTiles()))
+        hpx::dataflow(send_bcast_f, W.read(index_tile_w), serial_comm());
+    }
+    else {
+      auto recv_bcast_f = unwrapping([rank_panel_col](auto&& tile_w, auto&& comm_wrapper) {
+        broadcast::receive_from(rank_panel_col, comm_wrapper().rowCommunicator(), tile_w);
+      });
+
+      for (const dlaf::GlobalTileIndex& index_tile_w : iterate_range2d(W.nrTiles()))
+        hpx::dataflow(recv_bcast_f, W(index_tile_w), serial_comm());
     }
 
-    print(W, "W = ");
+    print(W, "W");
 
     // TODO HEMM X = At . W
     MatrixType X({At_size.rows() * nb, W.size().cols()}, dist.blockSize());
     dlaf::matrix::util::set(X, [](auto&&) { return 0; });
 
-    for (SizeType i_t = At_start.row(); i_t < dist.nrTiles().rows(); ++i_t) {
-      for (SizeType j_t = At_start.col(); j_t <= i_t; ++j_t) {
+    for (SizeType i_t = At_start.row(); i_t < dist.localNrTiles().rows(); ++i_t) {
+      const auto limit = dist.nextLocalTileFromGlobalTile<Coord::Col>(
+          dist.globalTileFromLocalTile<Coord::Row>(i_t) + 1);
+      for (SizeType j_t = At_start.col(); j_t < limit; ++j_t) {
         const LocalTileIndex index_tile_at{i_t, j_t};
 
         trace("COMPUTING X", index_tile_at);
 
-        const bool is_diagonal_tile = (i_t == j_t);
+        const auto index_tile_at_g = dist.globalTileIndex(index_tile_at);
+        const bool is_diagonal_tile = (index_tile_at_g.row() == index_tile_at_g.col());
 
         if (is_diagonal_tile) {
           // HEMM
@@ -520,6 +588,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
           const LocalTileIndex index_tile_w = index_tile_x;
 
           auto hemm_func = unwrapping([](auto&& tile_a, auto&& tile_w, auto&& tile_x) {
+            trace("HEMM");
             // clang-format off
             blas::hemm(blas::Layout::ColMajor,
                 blas::Side::Left, blas::Uplo::Lower,
@@ -584,7 +653,20 @@ int miniapp(hpx::program_options::variables_map& vm) {
       }
     }
 
-    print(X, "X = ");
+    // TODO ALL-REDUCE X
+    auto reduce_x_func = unwrapping([rank, rank_panel_col](auto&& tile_x, auto&& comm_wrapper) {
+      reduce(rank_panel_col, comm_wrapper().rowCommunicator(), MPI_SUM, make_data(tile_x),
+             make_data(tile_x));
+      if (rank.col() == rank_panel_col)
+        broadcast::send(comm_wrapper().rowCommunicator(), make_data(tile_x));
+      else
+        broadcast::receive_from(rank_panel_col, comm_wrapper().rowCommunicator(), make_data(tile_x));
+    });
+
+    for (const auto& index_tile_x : iterate_range2d(X.nrTiles()))
+      hpx::dataflow(reduce_x_func, X(index_tile_x), serial_comm());
+
+    print(X, "X");
 
     // TODO GEMM W2 = W* . X
     for (const auto& index_tile : iterate_range2d(W.nrTiles())) {
@@ -606,15 +688,15 @@ int miniapp(hpx::program_options::variables_map& vm) {
       hpx::dataflow(gemm_func, W.read(index_tile), X.read(index_tile), T(LocalTileIndex{0, 0}));
     }
 
-    print(T, "W2 = ");
+    // TODO all-reduce, everyone in the panel should have it
+
+    print(T, "W2");
 
     // TODO GEMM X = X - 0.5 . V . W2
-    for (const auto& index_tile_x : iterate_range2d(W.nrTiles())) {
+    for (const auto& index_tile_x : iterate_range2d(X.nrTiles())) {
       const LocalTileIndex index_tile_v{Ai_start.row() + index_tile_x.row(), Ai_start.col()};
 
       trace("UPDATING X", index_tile_x, "V", index_tile_v);
-
-      const bool is_diagonal_tile = (Ai_start.row() == index_tile_v.row());
 
       auto gemm_func = unwrapping([](auto&& tile_v, auto&& tile_w2, auto&& tile_x) {
         // clang-format off
@@ -629,29 +711,30 @@ int miniapp(hpx::program_options::variables_map& vm) {
         // clang-format on
       });
 
-      auto tile_v = is_diagonal_tile ? V0.read(LocalTileIndex{0, 0}) : A.read(index_tile_v);
+      auto tile_v = V_futures[get_reflector_row(index_tile_v)];
       auto tile_w2 = T(LocalTileIndex{0, 0});  // W2 is stored in T
 
       hpx::dataflow(gemm_func, tile_v, tile_w2, X(index_tile_x));
     }
 
-    print(X, "X = ");
+    print(X, "X");
 
     // TODO HER2K At = At - X . V* + V . X*
     trace("At", At_start, "size:", At_size);
-    for (SizeType i = At_start.row(); i < A.nrTiles().cols(); ++i) {
-      for (SizeType j = At_start.col(); j <= i; ++j) {
+    for (SizeType i = At_start.row(); i < dist.localNrTiles().rows(); ++i) {
+      const auto limit =
+          dist.nextLocalTileFromGlobalTile<Coord::Col>(dist.globalTileFromLocalTile<Coord::Row>(i) + 1);
+      for (SizeType j = At_start.col(); j < limit; ++j) {
         const LocalTileIndex index_tile_at{i, j};
 
         trace("HER2K At", index_tile_at);
 
-        const bool is_diagonal_tile = (index_tile_at.row() == index_tile_at.col());
+        const auto index_tile_at_g = dist.globalTileIndex(index_tile_at);
+        const bool is_diagonal_tile = (index_tile_at_g.row() == index_tile_at_g.col());
 
         if (is_diagonal_tile) {
           const LocalTileIndex index_tile_v{index_tile_at.row(), Ai_start.col()};
           const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
-
-          const bool is_first_reflector_tile = (Ai_start.row() == index_tile_v.row());
 
           auto her2k_func = unwrapping([](auto&& tile_v, auto&& tile_x, auto&& tile_at) {
             // clang-format off
@@ -666,18 +749,19 @@ int miniapp(hpx::program_options::variables_map& vm) {
             // clang-format on
           });
 
-          auto tile_v = is_first_reflector_tile ? V0.read(LocalTileIndex{0, 0}) : A.read(index_tile_v);
-          hpx::dataflow(her2k_func, tile_v, X.read(index_tile_x), A(index_tile_at));
+          hpx::dataflow(her2k_func, V_futures[get_reflector_row(index_tile_v)], X.read(index_tile_x),
+                        A(index_tile_at));
         }
         else {
           trace("double gemm");
 
+          const SizeType index_tile_at_local_row =
+              dist.localTileFromGlobalTile<Coord::Row>(index_tile_at_g.col());
+
           // GEMM A: X . V*
           {
             const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
-            const LocalTileIndex index_tile_v{index_tile_at.col(), Ai_start.col()};
-
-            const bool is_first_reflector_tile = (Ai_start.row() == index_tile_v.row());
+            const LocalTileIndex index_tile_v{index_tile_at_local_row, Ai_start.col()};
 
             auto gemm_a_func = unwrapping([](auto&& tile_x, auto&& tile_v, auto&& tile_at) {
               // clang-format off
@@ -692,15 +776,13 @@ int miniapp(hpx::program_options::variables_map& vm) {
               // clang-format on
             });
 
-            auto tile_v = is_first_reflector_tile ? V0.read(LocalTileIndex{0, 0}) : A.read(index_tile_v);
-            hpx::dataflow(gemm_a_func, X.read(index_tile_x), tile_v, A(index_tile_at));
+            hpx::dataflow(gemm_a_func, X.read(index_tile_x), V_futures[get_reflector_row(index_tile_v)],
+                          A(index_tile_at));
           }
 
           {
             const LocalTileIndex index_tile_v{index_tile_at.row(), Ai_start.col()};
-            const LocalTileIndex index_tile_x{index_tile_at.col() - At_start.row(), 0};
-
-            const bool is_first_reflector_tile = (Ai_start.row() == index_tile_v.row());
+            const LocalTileIndex index_tile_x{index_tile_at_local_row - At_start.row(), 0};
 
             auto gemm_b_func = unwrapping([](auto&& tile_v, auto&& tile_x, auto&& tile_at) {
               // clang-format off
@@ -715,15 +797,15 @@ int miniapp(hpx::program_options::variables_map& vm) {
               // clang-format on
             });
 
-            auto tile_v = is_first_reflector_tile ? V0.read(LocalTileIndex{0, 0}) : A.read(index_tile_v);
-            hpx::dataflow(gemm_b_func, tile_v, X.read(index_tile_x), A(index_tile_at));
+            hpx::dataflow(gemm_b_func, V_futures[get_reflector_row(index_tile_v)], X.read(index_tile_x),
+                          A(index_tile_at));
           }
         }
       }
     }
   }
 
-  print(A, "Z = ");
+  print(A, "Z");
 
   return hpx::finalize();
 }
@@ -753,34 +835,25 @@ int main(int argc, char** argv) {
 void print(ConstMatrixType& matrix, std::string prefix) {
   using dlaf::common::iterate_range2d;
 
-  std::ostringstream ss;
-  ss << prefix << "np.array([";
-
   const auto& distribution = matrix.distribution();
-  auto matrix_size = distribution.size();
-  for (const auto& index_g : iterate_range2d(matrix_size)) {
-    dlaf::GlobalTileIndex tile_g = distribution.globalTileIndex(index_g);
-    TileElementIndex index_e = distribution.tileElementIndex(index_g);
 
-    const auto& tile = matrix.read(tile_g).get();
-
-    ss << tile(index_e) << ", ";
-  }
-
-  bool is_vector = matrix_size.rows() == 1 || matrix_size.cols() == 1;
-  if (!is_vector)
-    matrix_size.transpose();
-  ss << "]).reshape" << matrix_size << (is_vector ? "" : ".T") << std::endl;
-
-  trace(ss.str());
-}
-
-void print_tile(const ConstTileType& tile) {
   std::ostringstream ss;
-  for (SizeType i_loc = 0; i_loc < tile.size().rows(); ++i_loc) {
-    for (SizeType j_loc = 0; j_loc < tile.size().cols(); ++j_loc)
-      ss << tile({i_loc, j_loc}) << ", ";
-    ss << std::endl;
+  ss << prefix << " = np.zeros((" << distribution.size() << "))" << std::endl;
+
+  for (const auto& index_tile : iterate_range2d(distribution.localNrTiles())) {
+    const auto& tile = matrix.read(index_tile).get();
+
+    for (const auto& index_el : iterate_range2d(tile.size())) {
+      dlaf::GlobalElementIndex index_g{
+          distribution.globalElementFromLocalTileAndTileElement<Coord::Row>(index_tile.row(),
+                                                                            index_el.row()),
+          distribution.globalElementFromLocalTileAndTileElement<Coord::Col>(index_tile.col(),
+                                                                            index_el.col()),
+      };
+      ss << prefix << "[" << index_g.row() << "," << index_g.col() << "] = " << tile(index_el)
+         << std::endl;
+    }
   }
+
   trace(ss.str());
 }
