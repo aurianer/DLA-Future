@@ -121,7 +121,8 @@ int miniapp(hpx::program_options::variables_map& vm) {
     };
     const LocalTileSize Ai_size{dist.localNrTiles().rows() - Ai_start.row(), 1};
 
-    const SizeType Ai_start_row_el_global = dist.globalElementFromGlobalTileAndTileElement<Coord::Row>(Ai_start_global.row(), 0);
+    const SizeType Ai_start_row_el_global =
+        dist.globalElementFromGlobalTileAndTileElement<Coord::Row>(Ai_start_global.row(), 0);
     const SizeType Ai_el_size_rows_global = A.size().rows() - Ai_start_row_el_global;
 
     const LocalTileIndex At_start{
@@ -141,7 +142,9 @@ int miniapp(hpx::program_options::variables_map& vm) {
       for (SizeType j_reflector = 0; j_reflector <= last_reflector; ++j_reflector) {
         const TileElementIndex index_el_x0{j_reflector, j_reflector};
 
-        trace(">>> COMPUTING local reflector", index_el_x0, dist.globalElementFromLocalTileAndTileElement<Coord::Col>(Ai_start.col(), index_el_x0.col()));
+        trace(">>> COMPUTING local reflector", index_el_x0,
+              dist.globalElementFromLocalTileAndTileElement<Coord::Col>(Ai_start.col(),
+                                                                        index_el_x0.col()));
 
         // compute norm + identify x0 component
         trace("COMPUTING NORM");
@@ -151,7 +154,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
         for (const LocalTileIndex& index_tile_x : iterate_range2d(Ai_start, Ai_size)) {
           const SizeType index_tile_v_global =
-            dist.globalTileFromLocalTile<Coord::Row>(index_tile_x.row());
+              dist.globalTileFromLocalTile<Coord::Row>(index_tile_x.row());
 
           const bool has_first_component = (index_tile_v_global == Ai_start_global.row());
 
@@ -191,13 +194,15 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
         // reduce norm
         auto reduce_norm_func = unwrapping([rank_v0](auto&& x0_and_norm, auto&& comm_wrapper) {
-            const Type local_sum = x0_and_norm.second;
-            Type norm = x0_and_norm.second;
-            reduce(rank_v0.row(), comm_wrapper().colCommunicator(), MPI_SUM, make_data(&local_sum, 1), make_data(&norm, 1));
-            x0_and_norm.second = norm;
-            return std::move(x0_and_norm);
+          const Type local_sum = x0_and_norm.second;
+          Type norm = x0_and_norm.second;
+          reduce(rank_v0.row(), comm_wrapper().colCommunicator(), MPI_SUM, make_data(&local_sum, 1),
+                 make_data(&norm, 1));
+          x0_and_norm.second = norm;
+          return std::move(x0_and_norm);
         });
-        fut_x0_and_partial_norm = hpx::dataflow(reduce_norm_func, fut_x0_and_partial_norm, serial_comm());
+        fut_x0_and_partial_norm =
+            hpx::dataflow(reduce_norm_func, fut_x0_and_partial_norm, serial_comm());
 
         hpx::shared_future<ReflectorParams> reflector_params;
         if (rank_v0 == rank) {
@@ -230,23 +235,23 @@ int miniapp(hpx::program_options::variables_map& vm) {
               hpx::dataflow(compute_parameters_func, fut_x0_and_partial_norm, rw_reflector_params);
 
           auto bcast_params_func = unwrapping([](const auto& params, auto&& comm_wrapper) {
-              Type data[2] = { params.y, params.factor };
-              broadcast::send(comm_wrapper().colCommunicator(), make_data(data, 2));
-              trace("sending params", data[0], data[1]);
+            Type data[2] = {params.y, params.factor};
+            broadcast::send(comm_wrapper().colCommunicator(), make_data(data, 2));
+            trace("sending params", data[0], data[1]);
           });
 
           hpx::dataflow(bcast_params_func, reflector_params, serial_comm());
         }
         else {
-          auto bcast_params_func = unwrapping([rank=rank_v0.row()](auto&& comm_wrapper) {
-              trace("waiting params");
-              Type data[2];
-              broadcast::receive_from(rank, comm_wrapper().colCommunicator(), make_data(data, 2));
-              ReflectorParams params;
-              params.y = data[0];
-              params.factor = data[1];
-              trace("received params", data[0], data[1]);
-              return params;
+          auto bcast_params_func = unwrapping([rank = rank_v0.row()](auto&& comm_wrapper) {
+            trace("waiting params");
+            Type data[2];
+            broadcast::receive_from(rank, comm_wrapper().colCommunicator(), make_data(data, 2));
+            ReflectorParams params;
+            params.y = data[0];
+            params.factor = data[1];
+            trace("received params", data[0], data[1]);
+            return params;
           });
 
           reflector_params = hpx::dataflow(bcast_params_func, serial_comm());
@@ -257,7 +262,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
         for (const LocalTileIndex& index_tile_v : iterate_range2d(Ai_start, Ai_size)) {
           const SizeType index_tile_v_global =
-            dist.globalTileFromLocalTile<Coord::Row>(index_tile_v.row());
+              dist.globalTileFromLocalTile<Coord::Row>(index_tile_v.row());
 
           const bool has_first_component = (index_tile_v_global == Ai_start_global.row());
 
@@ -291,7 +296,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
           for (const LocalTileIndex& index_tile_a : iterate_range2d(Ai_start, Ai_size)) {
             const SizeType index_tile_a_global =
-              dist.globalTileFromLocalTile<Coord::Row>(index_tile_a.row());
+                dist.globalTileFromLocalTile<Coord::Row>(index_tile_a.row());
 
             const bool has_first_component = (index_tile_a_global == Ai_start_global.row());
 
@@ -355,12 +360,13 @@ int miniapp(hpx::program_options::variables_map& vm) {
           }
           // TODO all-reduce W
           auto reduce_w_func = unwrapping([rank_v0](auto&& tile_w, auto&& comm_wrapper) {
-              auto communicator = comm_wrapper();
-              reduce(rank_v0.row(), comm_wrapper().colCommunicator(), MPI_SUM, make_data(tile_w), make_data(tile_w));
-              if (rank_v0.row() == communicator.rank().row())
-                broadcast::send(communicator.colCommunicator(), make_data(tile_w));
-              else
-                broadcast::receive_from(rank_v0.row(), communicator.colCommunicator(), make_data(tile_w));
+            auto communicator = comm_wrapper();
+            reduce(rank_v0.row(), comm_wrapper().colCommunicator(), MPI_SUM, make_data(tile_w),
+                   make_data(tile_w));
+            if (rank_v0.row() == communicator.rank().row())
+              broadcast::send(communicator.colCommunicator(), make_data(tile_w));
+            else
+              broadcast::receive_from(rank_v0.row(), communicator.colCommunicator(), make_data(tile_w));
           });
           hpx::dataflow(reduce_w_func, W(LocalTileIndex{0, 0}), serial_comm());
           print(W, "W");
@@ -368,7 +374,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
           // update trailing panel
           for (const LocalTileIndex& index_tile_a : iterate_range2d(Ai_start, Ai_size)) {
             const SizeType index_tile_a_global =
-              dist.globalTileFromLocalTile<Coord::Row>(index_tile_a.row());
+                dist.globalTileFromLocalTile<Coord::Row>(index_tile_a.row());
 
             const bool has_first_component = (index_tile_a_global == Ai_start_global.row());
 
@@ -384,7 +390,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
                   TileElementIndex V_start{first_element_in_tile, index_el_x0.col()};
                   const TileElementIndex W_start{0, index_el_x0.col() + 1};
 
-                  const Type tau = - 1 / (params.factor * params.y); // TODO FIXME
+                  const Type tau = -1 / (params.factor * params.y);  // TODO FIXME
                   trace("UPDATE TRAILING PANEL, tau =", tau);
                   trace("A");
                   print_tile(tile_a);
@@ -440,11 +446,9 @@ int miniapp(hpx::program_options::variables_map& vm) {
           trace("* COMPUTING T", index_tile_v);
 
           const SizeType index_tile_v_global =
-            dist.globalTileFromLocalTile<Coord::Row>(index_tile_v.row());
+              dist.globalTileFromLocalTile<Coord::Row>(index_tile_v.row());
 
           const bool has_first_component = (index_tile_v_global == Ai_start_global.row());
-
-          // skip the first component, becuase it should be 1, but it is not
 
           auto gemv_func =
               unwrapping([T_start, T_size, has_first_component,
@@ -501,30 +505,33 @@ int miniapp(hpx::program_options::variables_map& vm) {
         }
 
         if (!T_size.isEmpty()) {
-          auto reduce_t_func = unwrapping([rank_v0, T_start, T_size](auto&& tile_t, auto&& comm_wrapper) {
-            auto&& input_t = make_data(tile_t.ptr(T_start), T_size.rows());
-            std::vector<Type> out_data(T_size.rows());
-            auto&& output_t = make_data(out_data.data(), T_size.rows());
-            reduce(rank_v0.row(), comm_wrapper().colCommunicator(), MPI_SUM, input_t, output_t);
-            dlaf::common::copy(output_t, input_t);
-            trace("reducing", T_start, T_size.rows(), *tile_t.ptr()); // TODO reduce just the current, otherwise reduce all together
-          });
+          auto reduce_t_func =
+              unwrapping([rank_v0, T_start, T_size](auto&& tile_t, auto&& comm_wrapper) {
+                auto&& input_t = make_data(tile_t.ptr(T_start), T_size.rows());
+                std::vector<Type> out_data(T_size.rows());
+                auto&& output_t = make_data(out_data.data(), T_size.rows());
+                reduce(rank_v0.row(), comm_wrapper().colCommunicator(), MPI_SUM, input_t, output_t);
+                dlaf::common::copy(output_t, input_t);
+                trace("reducing", T_start, T_size.rows(),
+                      *tile_t.ptr());  // TODO reduce just the current, otherwise reduce all together
+              });
 
-          hpx::dataflow(reduce_t_func, T(LocalTileIndex{0, 0}), serial_comm()); // TODO just reducer needs RW
+          hpx::dataflow(reduce_t_func, T(LocalTileIndex{0, 0}),
+                        serial_comm());  // TODO just reducer needs RW
         }
 
         if (rank_v0 == rank) {
           auto trmv_func = unwrapping([T_start, T_size](auto&& tile_t) {
-              trace("trmv", *tile_t.ptr());
-              // t = T . t
-              // clang-format off
-              blas::trmv(blas::Layout::ColMajor,
-                  blas::Uplo::Upper, blas::Op::NoTrans, blas::Diag::NonUnit,
-                  T_size.rows(),
-                  tile_t.ptr(), tile_t.ld(),
-                  tile_t.ptr(T_start), 1);
-              // clang-format on
-              });
+            trace("trmv", *tile_t.ptr());
+            // t = T . t
+            // clang-format off
+            blas::trmv(blas::Layout::ColMajor,
+                blas::Uplo::Upper, blas::Op::NoTrans, blas::Diag::NonUnit,
+                T_size.rows(),
+                tile_t.ptr(), tile_t.ld(),
+                tile_t.ptr(T_start), 1);
+            // clang-format on
+          });
 
           hpx::dataflow(trmv_func, T(LocalTileIndex{0, 0}));
         }
@@ -564,9 +571,10 @@ int miniapp(hpx::program_options::variables_map& vm) {
       hpx::dataflow(send_bcast_f, T.read(LocalTileIndex{0, 0}), serial_comm());
     }
     else {
-      auto recv_bcast_f = unwrapping([rank_root=comm_grid.rankFullCommunicator(rank_v0)](auto&& tile_t, auto&& comm_wrapper) {
-        broadcast::receive_from(rank_root, comm_wrapper().fullCommunicator(), tile_t);
-      });
+      auto recv_bcast_f = unwrapping(
+          [rank_root = comm_grid.rankFullCommunicator(rank_v0)](auto&& tile_t, auto&& comm_wrapper) {
+            broadcast::receive_from(rank_root, comm_wrapper().fullCommunicator(), tile_t);
+          });
       hpx::dataflow(recv_bcast_f, T(LocalTileIndex{0, 0}), serial_comm());
     }
 
