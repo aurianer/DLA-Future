@@ -11,8 +11,6 @@
 #include "dlaf/communication/communicator_grid.h"
 #include "dlaf/communication/functions_sync.h"
 #include "dlaf/communication/init.h"
-#include "dlaf/communication/sync/broadcast.h"
-#include "dlaf/communication/sync/reduce.h"
 #include "dlaf/lapack_tile.h"
 #include "dlaf/matrix.h"
 #include "dlaf/matrix/index.h"
@@ -361,13 +359,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
           // TODO all-reduce W
           auto reduce_w_func = unwrapping([rank_v0](auto&& tile_w, auto&& comm_wrapper) {
-            auto communicator = comm_wrapper();
-            reduce(rank_v0.row(), comm_wrapper().colCommunicator(), MPI_SUM, make_data(tile_w),
-                   make_data(tile_w));
-            if (rank_v0.row() == communicator.rank().row())
-              broadcast::send(communicator.colCommunicator(), make_data(tile_w));
-            else
-              broadcast::receive_from(rank_v0.row(), communicator.colCommunicator(), make_data(tile_w));
+            all_reduce(comm_wrapper().colCommunicator(), MPI_SUM, make_data(tile_w));
           });
 
           hpx::dataflow(reduce_w_func, W(LocalTileIndex{0, 0}), serial_comm());
@@ -828,17 +820,8 @@ int miniapp(hpx::program_options::variables_map& vm) {
       auto reduce_x_func = unwrapping([rank](auto&& tile_x, auto&& comm_wrapper) {
         auto comm_grid = comm_wrapper();
 
-        reduce(0, comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x), make_data(tile_x));
-        if (0 == rank.col())
-          broadcast::send(comm_grid.rowCommunicator(), make_data(tile_x));
-        else
-          broadcast::receive_from(0, comm_grid.rowCommunicator(), make_data(tile_x));
-
-        reduce(0, comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x), make_data(tile_x));
-        if (0 == rank.row())
-          broadcast::send(comm_grid.colCommunicator(), make_data(tile_x));
-        else
-          broadcast::receive_from(0, comm_grid.colCommunicator(), make_data(tile_x));
+        all_reduce(comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x));
+        all_reduce(comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x));
       });
 
       hpx::dataflow(reduce_x_func, X(index_tile_x), serial_comm());
@@ -878,13 +861,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
     // TODO all-reduce instead of computing it on each node, everyone in the panel should have it
     auto all_reduce_w2 = unwrapping([](auto&& tile_w2, auto&& comm_wrapper) {
-      auto comm_grid = comm_wrapper();
-
-      reduce(0, comm_grid.colCommunicator(), MPI_SUM, make_data(tile_w2), make_data(tile_w2));
-      if (0 == comm_grid.rank().row())
-        broadcast::send(comm_grid.colCommunicator(), make_data(tile_w2));
-      else
-        broadcast::receive_from(0, comm_grid.colCommunicator(), make_data(tile_w2));
+      all_reduce(comm_wrapper().colCommunicator(), MPI_SUM, make_data(tile_w2));
     });
 
     hpx::dataflow(all_reduce_w2, W2(LocalTileIndex{0, 0}), serial_comm());
