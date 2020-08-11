@@ -137,13 +137,10 @@ int miniapp(hpx::program_options::variables_map& vm) {
       // for each column in the panel, compute reflector and update panel
       // if reflector would be just the first 1, skip the last column
       const SizeType last_reflector = (nb - 1) - (Ai_el_size_rows_global == nb ? 1 : 0);
-      trace("LIMIT:", last_reflector);
       for (SizeType j_reflector = 0; j_reflector <= last_reflector; ++j_reflector) {
         const TileElementIndex index_el_x0{j_reflector, j_reflector};
 
-        trace(">>> COMPUTING local reflector", index_el_x0,
-              dist.globalElementFromLocalTileAndTileElement<Coord::Col>(Ai_start.col(),
-                                                                        index_el_x0.col()));
+        trace(">>> COMPUTING local reflector", index_el_x0);
 
         // compute norm + identify x0 component
         trace("COMPUTING NORM");
@@ -200,6 +197,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
           x0_and_norm.second = norm;
           return std::move(x0_and_norm);
         });
+
         fut_x0_and_partial_norm =
             hpx::dataflow(reduce_norm_func, fut_x0_and_partial_norm, serial_comm());
 
