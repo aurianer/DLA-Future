@@ -122,10 +122,6 @@ int miniapp(hpx::program_options::variables_map& vm) {
     };
     const LocalTileSize Ai_size{dist.localNrTiles().rows() - Ai_start.row(), 1};
 
-    const SizeType Ai_start_row_el_global =
-        dist.globalElementFromGlobalTileAndTileElement<Coord::Row>(Ai_start_global.row(), 0);
-    const SizeType Ai_el_size_rows_global = A.size().rows() - Ai_start_row_el_global;
-
     const LocalTileIndex At_start{
         Ai_start.row(),
         dist.nextLocalTileFromGlobalTile<Coord::Col>(At_start_global.col()),
@@ -133,6 +129,10 @@ int miniapp(hpx::program_options::variables_map& vm) {
     const LocalTileSize At_size{Ai_size.rows(), dist.localNrTiles().cols() - At_start.col()};
 
     if (rank_v0.col() == rank.col()) {
+      const SizeType Ai_start_row_el_global =
+        dist.globalElementFromGlobalTileAndTileElement<Coord::Row>(Ai_start_global.row(), 0);
+      const SizeType Ai_el_size_rows_global = A.size().rows() - Ai_start_row_el_global;
+
       trace(">>> COMPUTING panel");
       trace(">>> Ai", Ai_size, Ai_start);
 
@@ -804,12 +804,6 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
             auto gemm_b_func = unwrapping([](auto&& tile_a, auto&& tile_w, auto&& tile_x) {
               trace("GEMM2");
-              trace("A");
-              print_tile(tile_a);
-              trace("W");
-              print_tile(tile_w);
-              trace("X");
-              print_tile(tile_x);
 
               // clang-format off
               blas::gemm(blas::Layout::ColMajor,
@@ -821,9 +815,6 @@ int miniapp(hpx::program_options::variables_map& vm) {
                   Type(1),
                   tile_x.ptr(), tile_x.ld());
               // clang-format on
-
-              trace("X");
-              print_tile(tile_x);
             });
 
             hpx::dataflow(gemm_b_func, A.read(index_tile_at), W.read(index_tile_w), X(index_tile_x));
@@ -857,7 +848,9 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
     // TODO GEMM W2 = W* . X
     MatrixType W2 = std::move(T);
-    dlaf::matrix::util::set(W2, [](auto&&) { return 0; });
+
+    if (W.distribution().localNrTiles().isEmpty())
+      dlaf::matrix::util::set(W2, [](auto&&) { return 0; });
 
     for (const auto& index_tile : iterate_range2d(W.distribution().localNrTiles())) {
       const Type beta = (index_tile.row() == 0) ? 0 : 1;
@@ -986,7 +979,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
             const SizeType index_tile_v{index_tile_at.col() - At_start.col()};
 
             auto gemm_a_func = unwrapping([](auto&& tile_x, auto&& tile_v, auto&& tile_at) {
-              trace("double gemm-1");
+              trace("DOUBLE GEMM-1");
 
               // clang-format off
               blas::gemm(blas::Layout::ColMajor,
@@ -1012,7 +1005,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
             const dlaf::GlobalTileIndex index_tile_x{index_tile_at_g.col() - At_start_global.col(), 0};
 
             auto gemm_b_func = unwrapping([](auto&& tile_v, auto&& tile_x, auto&& tile_at) {
-              trace("double gemm-2");
+              trace("DOUBLE GEMM-2");
 
               // clang-format off
               blas::gemm(blas::Layout::ColMajor,
