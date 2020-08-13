@@ -926,9 +926,6 @@ int miniapp(hpx::program_options::variables_map& vm) {
         auto reduce_x_func = unwrapping([=](auto&& tile_x_conj, auto&& tile_x, auto&& comm_wrapper) {
           auto comm_grid = comm_wrapper();
 
-          trace("reducing root X col-wise", rank_owner_row, index_tile_k);
-          print_tile(tile_x_conj);
-
           reduce(rank_owner_row, comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x_conj), make_data(tile_x));
 
           trace("REDUCED COL", index_tile_k);
@@ -941,9 +938,6 @@ int miniapp(hpx::program_options::variables_map& vm) {
       else {
         auto reduce_x_func = unwrapping([=](auto&& tile_x_conj, auto&& comm_wrapper) {
             auto comm_grid = comm_wrapper();
-
-            trace("reducing send X col-wise", rank_owner_row, index_tile_k, "x_conj_col", index_xconj_col);
-            print_tile(tile_x_conj);
 
             Type fake;
             reduce(rank_owner_row, comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x_conj), make_data(&fake, 0));
@@ -1063,8 +1057,6 @@ int miniapp(hpx::program_options::variables_map& vm) {
         const auto index_x_row = dist.localTileFromGlobalTile<Coord::Row>(index_tile_k) - At_start.row();
 
         auto bcast_xupd_colwise_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
-          trace("*** send", rank_owner);
-          print_tile(tile_x);
           broadcast::send(comm_wrapper().colCommunicator(), make_data(tile_x));
         });
 
@@ -1072,7 +1064,6 @@ int miniapp(hpx::program_options::variables_map& vm) {
       }
       else {
         auto bcast_xupd_colwise_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
-          trace("*** recv", rank_owner);
           broadcast::receive_from(rank_owner, comm_wrapper().colCommunicator(), make_data(tile_x));
         });
 
@@ -1082,8 +1073,6 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
     print(X, "Xr-upd");
     print(X_conj, "X_conj-upd");
-
-    // TODO fix problem with RW
 
     // 3E UPDATE
     trace("At", At_start, "size:", At_size);
