@@ -711,25 +711,26 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
     // W* bcast col-wise
     MatrixType W_conj({nb, At_size.cols() * nb}, dist.blockSize());
+    dlaf::matrix::util::set(W_conj, [](auto&&) { return 0; }); // TODO superflous? not used here, not use later?
 
-    for (const LocalTileIndex index_tile_w : iterate_range2d(W_conj.distribution().localNrTiles())) {
-      const SizeType rank_row_owner = dist.rankGlobalTile<Coord::Row>(
-          dist.globalTileFromLocalTile<Coord::Col>(index_tile_w.col() + At_start.col()));
+    for (const LocalTileIndex index_tile_xconj : iterate_range2d(W_conj.distribution().localNrTiles())) {
+      const auto index_k = dist.globalTileFromLocalTile<Coord::Col>(index_tile_xconj.col() + At_start.col());
+      const SizeType rank_row_owner = dist.rankGlobalTile<Coord::Row>(index_k);
 
       if (rank_row_owner == rank.row()) {
-        auto bcast_send_w_colwise_func = unwrapping([](auto&& tile_w, auto&& comm_wrapper) {
+        auto bcast_send_w_colwise_func = unwrapping([=](auto&& tile_w, auto&& comm_wrapper) {
           broadcast::send(comm_wrapper().colCommunicator(), make_data(tile_w));
         });
 
-        hpx::dataflow(std::move(bcast_send_w_colwise_func), W.read(LocalTileIndex{0, 0}), serial_comm());
+        const auto index_tile_x = dist.localTileFromGlobalTile<Coord::Row>(index_k) - At_start.row();
+        hpx::dataflow(std::move(bcast_send_w_colwise_func), W.read(LocalTileIndex{index_tile_x, 0}), serial_comm());
       }
       else {
-        auto bcast_recv_w_colwise_func = unwrapping([rank_row_owner](auto&& tile_w,
-                                                                     auto&& comm_wrapper) {
+        auto bcast_recv_w_colwise_func = unwrapping([=](auto&& tile_w, auto&& comm_wrapper) {
           broadcast::receive_from(rank_row_owner, comm_wrapper().colCommunicator(), make_data(tile_w));
         });
 
-        hpx::dataflow(std::move(bcast_recv_w_colwise_func), W_conj(index_tile_w), serial_comm());
+        hpx::dataflow(std::move(bcast_recv_w_colwise_func), W_conj(index_tile_xconj), serial_comm());
       }
     }
 
@@ -737,10 +738,12 @@ int miniapp(hpx::program_options::variables_map& vm) {
     print(W_conj, "W_conj");
 
     // 3B COMPUTE X
-    MatrixType X({At_size_global.rows() * nb, nb}, dist.blockSize());
+    MatrixType X({(At_size.rows() != 0 ? At_size.rows() : 1) * nb, nb}, dist.blockSize());
+    MatrixType X_conj({nb, (At_size.cols() != 0 ? At_size.cols() : 1) *  nb}, dist.blockSize());
 
     // TODO maybe it may be enough doing it if (At_size.isEmpty())
     dlaf::matrix::util::set(X, [](auto&&) { return 0; });
+    dlaf::matrix::util::set(X_conj, [](auto&&) { return 0; });
 
     // HEMM X = At . W
     for (SizeType i_t = At_start.row(); i_t < dist.localNrTiles().rows(); ++i_t) {
@@ -754,11 +757,18 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
         if (is_diagonal_tile) {
           // HEMM
-          const LocalTileIndex index_tile_x{index_tile_at_g.row() - At_start_global.row(), 0};
+          const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
           const LocalTileIndex index_tile_w{index_tile_at.row() - At_start.row(), 0};
 
           auto hemm_func = unwrapping([](auto&& tile_a, auto&& tile_w, auto&& tile_x) {
             trace("HEMM");
+
+            trace("tile_a");
+            print_tile(tile_a);
+            trace("tile_w");
+            print_tile(tile_w);
+            trace("tile_x");
+            print_tile(tile_x);
 
             // clang-format off
             blas::hemm(blas::Layout::ColMajor,
@@ -770,6 +780,9 @@ int miniapp(hpx::program_options::variables_map& vm) {
                 Type(1),
                 tile_x.ptr(), tile_x.ld());
             // clang-format on
+
+            trace("*tile_x");
+            print_tile(tile_x);
           });
 
           hpx::dataflow(hemm_func, A.read(index_tile_at), W.read(index_tile_w), X(index_tile_x));
@@ -777,11 +790,17 @@ int miniapp(hpx::program_options::variables_map& vm) {
         else {
           // A  . W
           {
-            const LocalTileIndex index_tile_x{index_tile_at_g.row() - At_start_global.row(), 0};
-            const LocalTileIndex index_tile_w{index_tile_at.col() - At_start.col(), 0};
+            const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
 
             auto gemm_a_func = unwrapping([](auto&& tile_a, auto&& tile_w, auto&& tile_x) {
               trace("GEMM1");
+
+              trace("tile_a");
+              print_tile(tile_a);
+              trace("tile_w");
+              print_tile(tile_w);
+              trace("tile_x");
+              print_tile(tile_x);
 
               // clang-format off
               blas::gemm(blas::Layout::ColMajor,
@@ -793,19 +812,35 @@ int miniapp(hpx::program_options::variables_map& vm) {
                   Type(1),
                   tile_x.ptr(), tile_x.ld());
               // clang-format on
+
+              trace("*tile_x");
+              print_tile(tile_x);
             });
 
-            hpx::dataflow(gemm_a_func, A.read(index_tile_at), W_conj.read(index_tile_w),
-                          X(index_tile_x));
+            const bool own_w = rank.row() == dist.rankGlobalTile<Coord::Row>(index_tile_at_g.col());
+            hpx::shared_future<ConstTileType> tile_w;
+            if (own_w)
+              tile_w = W.read(LocalTileIndex{dist.localTileFromGlobalTile<Coord::Row>(index_tile_at_g.col()) - At_start.row(), 0});
+            else
+              tile_w = W_conj.read(LocalTileIndex{0, dist.localTileFromGlobalTile<Coord::Col>(index_tile_at_g.col()) - At_start.col()});
+
+            hpx::dataflow(gemm_a_func, A.read(index_tile_at), tile_w, X(index_tile_x));
           }
 
           // A* . W
           {
-            const LocalTileIndex index_tile_x{index_tile_at_g.col() - At_start_global.col(), 0};
+            const LocalTileIndex index_tile_xconj{0, index_tile_at.col() - At_start.col()};
             const LocalTileIndex index_tile_w{index_tile_at.row() - At_start.row(), 0};
 
             auto gemm_b_func = unwrapping([](auto&& tile_a, auto&& tile_w, auto&& tile_x) {
               trace("GEMM2");
+
+              trace("tile_a");
+              print_tile(tile_a);
+              trace("tile_w");
+              print_tile(tile_w);
+              trace("tile_x");
+              print_tile(tile_x);
 
               // clang-format off
               blas::gemm(blas::Layout::ColMajor,
@@ -817,113 +852,216 @@ int miniapp(hpx::program_options::variables_map& vm) {
                   Type(1),
                   tile_x.ptr(), tile_x.ld());
               // clang-format on
+
+              trace("*tile_x");
+              print_tile(tile_x);
             });
 
-            hpx::dataflow(gemm_b_func, A.read(index_tile_at), W.read(index_tile_w), X(index_tile_x));
+            // if it will be reduced on itself, just add it now
+            const bool own_x = dist.rankGlobalTile<Coord::Row>(index_tile_at_g.col()) == rank.row();
+            hpx::future<TileType> tile_x;
+            if (own_x)
+              tile_x = X(LocalTileIndex{dist.localTileFromGlobalTile<Coord::Row>(index_tile_at_g.col()) - At_start.row(), 0});
+            else
+              tile_x = X_conj(index_tile_xconj);
+
+            hpx::dataflow(gemm_b_func, A.read(index_tile_at), W.read(index_tile_w), tile_x);
           }
         }
       }
     }
 
-    // reduce X row-wise and col-wise
-    for (const auto& index_tile_x : iterate_range2d(X.nrTiles())) {
-      auto reduce_x_func = unwrapping([rank](auto&& tile_x, auto&& comm_wrapper) {
+    print(X, "X");
+    print(X_conj, "X_conj");
+
+    trace("REDUCING X", "At size", At_size, "At_start", At_start, "X", X.nrTiles());
+
+    for (SizeType index_x = 0; index_x < At_size.rows(); ++index_x) {
+      const auto index_tile_k = dist.globalTileFromLocalTile<Coord::Row>(index_x + At_start.row());
+
+      const auto rank_owner_col = dist.rankGlobalTile<Coord::Col>(index_tile_k);
+
+      if (rank_owner_col == rank.col()) {
+        auto reduce_x_func = unwrapping([=](auto&& tile_x_conj, auto&& tile_x, auto&& comm_wrapper) {
+          auto comm_grid = comm_wrapper();
+
+          trace("reducing root X row-wise", rank_owner_col, index_tile_k);
+          print_tile(tile_x);
+
+          reduce(rank_owner_col, comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x), make_data(tile_x_conj));
+
+          trace("REDUCED ROW", index_tile_k);
+          print_tile(tile_x_conj);
+        });
+
+        const auto index_x_row = dist.localTileFromGlobalTile<Coord::Col>(index_tile_k) - At_start.col();
+        hpx::dataflow(reduce_x_func, X_conj(LocalTileIndex{0, index_x_row}), X(LocalTileIndex{index_x, 0}), serial_comm()); // TODO RW
+      }
+      else {
+        auto reduce_x_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
+            auto comm_grid = comm_wrapper();
+
+            trace("reducing send X row-wise", rank_owner_col, index_tile_k, "x", index_x);
+            print_tile(tile_x);
+
+            Type fake;
+            reduce(rank_owner_col, comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x), make_data(&fake, 0));
+          });
+
+          hpx::dataflow(reduce_x_func, X(LocalTileIndex{index_x, 0}), serial_comm()); // TODO RW
+        }
+    }
+
+    print(X, "X-rowred");
+    print(X_conj, "X_conj-rowred");
+
+    // reducing X col-wise
+    for (SizeType index_xconj_col = 0; index_xconj_col < At_size.cols(); ++index_xconj_col) {
+      const auto index_tile_k =
+          dist.globalTileFromLocalTile<Coord::Col>(index_xconj_col + At_start.col());
+
+      const auto rank_owner_row = dist.rankGlobalTile<Coord::Row>(index_tile_k);
+
+      if (rank_owner_row == rank.row()) {
+        auto reduce_x_func = unwrapping([=](auto&& tile_x_conj, auto&& tile_x, auto&& comm_wrapper) {
+          auto comm_grid = comm_wrapper();
+
+          trace("reducing root X col-wise", rank_owner_row, index_tile_k);
+          print_tile(tile_x_conj);
+
+          reduce(rank_owner_row, comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x_conj), make_data(tile_x));
+
+          trace("REDUCED COL", index_tile_k);
+          print_tile(tile_x);
+        });
+
+        const auto index_x_row = dist.localTileFromGlobalTile<Coord::Row>(index_tile_k) - At_start.row();
+        hpx::dataflow(reduce_x_func, X_conj(LocalTileIndex{0, index_xconj_col}), X(LocalTileIndex{index_x_row, 0}), serial_comm()); // TODO RW
+      }
+      else {
+        auto reduce_x_func = unwrapping([=](auto&& tile_x_conj, auto&& comm_wrapper) {
+            auto comm_grid = comm_wrapper();
+
+            trace("reducing send X col-wise", rank_owner_row, index_tile_k, "x_conj_col", index_xconj_col);
+            print_tile(tile_x_conj);
+
+            Type fake;
+            reduce(rank_owner_row, comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x_conj), make_data(&fake, 0));
+          });
+
+          hpx::dataflow(reduce_x_func, X_conj(LocalTileIndex{0, index_xconj_col}), serial_comm()); // TODO RW
+        }
+    }
+
+    print(X, "X");
+
+    // TODO this seems superflous, but I need it as it is now because I have to reduce for computing W2
+    // and I cannot reduce in diagonal
+    // x broadcast row-wise
+    for (SizeType index_x = 0; index_x < At_size.rows(); ++index_x) {
+      const LocalTileIndex index_tile_x{index_x, 0};
+
+      const auto result_row = dist.globalTileFromLocalTile<Coord::Row>(index_x + At_start.row());
+      const auto rank_owner_col = dist.rankGlobalTile<Coord::Col>(result_row);
+
+      auto broadcast_rowwise_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
         auto comm_grid = comm_wrapper();
 
-        all_reduce(comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x));
-        all_reduce(comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x));
+        if (rank_owner_col == rank.col())
+          broadcast::send(comm_grid.rowCommunicator(), make_data(tile_x));
+        else
+          broadcast::receive_from(rank_owner_col, comm_grid.rowCommunicator(), make_data(tile_x));
       });
 
-      hpx::dataflow(reduce_x_func, X(index_tile_x), serial_comm());
+      hpx::dataflow(broadcast_rowwise_func, X(index_tile_x), serial_comm()); // TODO RW
     }
 
     print(X, "X");
 
     // 3C COMPUTE W2
     MatrixType W2 = std::move(T);
+    dlaf::matrix::util::set(W2, [](auto&&) { return 0; });
 
-    if (W.distribution().localNrTiles().isEmpty())
-      dlaf::matrix::util::set(W2, [](auto&&) { return 0; });
+    if (0 == rank.col()) {
+      // GEMM W2 = W* . X
+      for (const auto& index_tile : iterate_range2d(W.distribution().localNrTiles())) {
+        const Type beta = (index_tile.row() == 0) ? 0 : 1;
+        auto gemm_func = unwrapping([beta](auto&& tile_w, auto&& tile_x, auto&& tile_w2) {
+          trace("GEMM W2");
 
-    // GEMM W2 = W* . X
-    for (const auto& index_tile : iterate_range2d(W.distribution().localNrTiles())) {
-      const Type beta = (index_tile.row() == 0) ? 0 : 1;
-      auto gemm_func = unwrapping([beta](auto&& tile_w, auto&& tile_x, auto&& tile_w2) {
-        trace("GEMM W2");
+          // clang-format off
+          blas::gemm(blas::Layout::ColMajor,
+              blas::Op::ConjTrans, blas::Op::NoTrans,
+              tile_w2.size().rows(), tile_w2.size().cols(), tile_w.size().cols(),
+              Type(1),
+              tile_w.ptr(), tile_w.ld(),
+              tile_x.ptr(), tile_x.ld(),
+              beta,
+              tile_w2.ptr(), tile_w2.ld());
+          // clang-format on
+        });
 
-        // clang-format off
-        blas::gemm(blas::Layout::ColMajor,
-            blas::Op::ConjTrans, blas::Op::NoTrans,
-            tile_w2.size().rows(), tile_w2.size().cols(), tile_w.size().cols(),
-            Type(1),
-            tile_w.ptr(), tile_w.ld(),
-            tile_x.ptr(), tile_x.ld(),
-            beta,
-            tile_w2.ptr(), tile_w2.ld());
-        // clang-format on
+        hpx::dataflow(gemm_func, W.read(index_tile), X.read(index_tile), W2(LocalTileIndex{0, 0}));
+      }
+
+      // all-reduce instead of computing it on each node, everyone in the panel should have it
+      auto all_reduce_w2 = unwrapping([](auto&& tile_w2, auto&& comm_wrapper) {
+        all_reduce(comm_wrapper().colCommunicator(), MPI_SUM, make_data(tile_w2));
       });
 
-      const LocalTileIndex index_x{dist.globalTileFromLocalTile<Coord::Row>(index_tile.row() +
-                                                                            At_start.row()) -
-                                       At_start_global.row(),
-                                   0};
-      hpx::dataflow(gemm_func, W.read(index_tile), X.read(index_x), W2(LocalTileIndex{0, 0}));
+      hpx::dataflow(std::move(all_reduce_w2), W2(LocalTileIndex{0, 0}), serial_comm());
+
+      print(W2, "W2");
+
+      // 3D UPDATE X
+      for (SizeType index_v_row = 0; index_v_row < V_futures.size(); ++index_v_row) {
+        // GEMM X = X - 0.5 . V . W2
+        auto gemm_func = unwrapping([](auto&& tile_v, auto&& tile_w2, auto&& tile_x) {
+          trace("UPDATING X");
+
+          // clang-format off
+          blas::gemm(blas::Layout::ColMajor,
+              blas::Op::NoTrans, blas::Op::NoTrans,
+              tile_x.size().rows(), tile_x.size().cols(), tile_v.size().cols(),
+              Type(-0.5),
+              tile_v.ptr(), tile_v.ld(),
+              tile_w2.ptr(), tile_w2.ld(),
+              Type(1),
+              tile_x.ptr(), tile_x.ld());
+          // clang-format on
+        });
+
+        auto tile_v = V_futures[index_v_row];
+        auto tile_w2 = W2(LocalTileIndex{0, 0});
+
+        const LocalTileIndex index_tile_x{index_v_row, 0};
+        hpx::dataflow(gemm_func, tile_v, tile_w2, X(index_tile_x));
+      }
+
+      print(X, "XUpd");
     }
 
-    // all-reduce instead of computing it on each node, everyone in the panel should have it
-    auto all_reduce_w2 = unwrapping([](auto&& tile_w2, auto&& comm_wrapper) {
-      all_reduce(comm_wrapper().colCommunicator(), MPI_SUM, make_data(tile_w2));
+    // broadcast X rowwise
+    auto bcast_x_rowwise_func = unwrapping([rank](auto&& tile_x, auto&& comm_wrapper) {
+      trace("broadcasting Xupd");
+      if (0 == rank.col())
+        broadcast::send(comm_wrapper().rowCommunicator(), make_data(tile_x));
+      else
+        broadcast::receive_from(0, comm_wrapper().rowCommunicator(), make_data(tile_x));
     });
 
-    hpx::dataflow(std::move(all_reduce_w2), W2(LocalTileIndex{0, 0}), serial_comm());
+    for (const auto& index_tile_x : iterate_range2d(X.distribution().localNrTiles()))
+      hpx::dataflow(bcast_x_rowwise_func, X(index_tile_x), serial_comm());
 
-    print(W2, "W2");
+    print(X, "Xupd");
 
-    // 3D UPDATE X
-    for (SizeType index_v_row = 0; index_v_row < V_futures.size(); ++index_v_row) {
-      const dlaf::GlobalTileIndex index_tile_x{dist.globalTileFromLocalTile<Coord::Row>(Ai_start.row() +
-                                                                                        index_v_row) -
-                                                   Ai_start_global.row(),
-                                               0};
+    // TODO broadcast Xupd rowwise/colwise
 
-      // GEMM X = X - 0.5 . V . W2
-      auto gemm_func = unwrapping([](auto&& tile_v, auto&& tile_w2, auto&& tile_x) {
-        trace("UPDATING X");
+    // TODO fix problem with non-participating ranks
 
-        // clang-format off
-        blas::gemm(blas::Layout::ColMajor,
-            blas::Op::NoTrans, blas::Op::NoTrans,
-            tile_x.size().rows(), tile_x.size().cols(), tile_v.size().cols(),
-            Type(-0.5),
-            tile_v.ptr(), tile_v.ld(),
-            tile_w2.ptr(), tile_w2.ld(),
-            Type(1),
-            tile_x.ptr(), tile_x.ld());
-        // clang-format on
-      });
+    // TODO fix problem with RW
 
-      auto tile_v = V_futures[index_v_row];
-      auto tile_w2 = W2(LocalTileIndex{0, 0});
-
-      hpx::dataflow(gemm_func, tile_v, tile_w2, X(index_tile_x));
-    }
-
-    // broadcast X colwise
-    for (const dlaf::GlobalTileIndex& index_tile_x : iterate_range2d(X.nrTiles())) {
-      const SizeType rank_row =
-          dist.rankGlobalTile<Coord::Row>(index_tile_x.row() + Ai_start_global.row());
-
-      auto bcast_x_colwise_func = unwrapping([rank_row, rank](auto&& tile_x, auto&& comm_wrapper) {
-        if (rank_row == rank.row())
-          broadcast::send(comm_wrapper().colCommunicator(), make_data(tile_x));
-        else
-          broadcast::receive_from(rank_row, comm_wrapper().colCommunicator(), make_data(tile_x));
-      });
-
-      hpx::dataflow(bcast_x_colwise_func, X(index_tile_x), serial_comm());
-    }
-
-    print(X, "X");
+    break;
 
     // 3E UPDATE
     trace("At", At_start, "size:", At_size);
