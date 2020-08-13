@@ -41,16 +41,22 @@ for index, j_r in enumerate(range(nb, n, nb)):
 
     V = V.T
     V = np.tril(V)
+
     for t in range(V.shape[1]): V[t, t] = 1
     print('V\n', V)
 
     H[j_r:,j_r-nb:j_r] = V
 
+    # update Ai
+    A[j_r:j_r+nb,j_r-nb:j_r] = R
+
+    # COMPUTE T-factor
     print('ts', ts)
     T = Ts[index]
     print('T', T)
     for t in range(T.shape[0]): assert(T[t,t] - ts[t] < 1e-3)
 
+    # UPDATE TRAILING MATRIX
     W = V @ T
     print('W\n', W)
 
@@ -67,7 +73,6 @@ for index, j_r in enumerate(range(nb, n, nb)):
 
     # in-place computation
     A[j_r:,j_r:] = At
-    A[j_r:j_r+nb,j_r-nb:j_r] = R
     A[j_r+nb:,j_r-nb:j_r] = 0
 
     print('A\n', np.tril(A))
