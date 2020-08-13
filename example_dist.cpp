@@ -920,7 +920,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
           trace("reducing root X row-wise", rank_owner_col, index_tile_k);
           print_tile(tile_x);
 
-          reduce(rank_owner_col, comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x), make_data(tile_x));
+          reduce(0, comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x), make_data(tile_x));
 
           trace("REDUCED ROW", index_tile_k);
           print_tile(tile_x);
@@ -936,35 +936,11 @@ int miniapp(hpx::program_options::variables_map& vm) {
           trace("reducing send X row-wise", rank_owner_col, index_tile_k, "x", index_x);
           print_tile(tile_x);
 
-          Type fake;
-          reduce(rank_owner_col, comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x), make_data(&fake, 0));
+          reduce(0, comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x), make_data(tile_x));
         });
 
         hpx::dataflow(reduce_x_func, X(LocalTileIndex{index_x, 0}), serial_comm()); // TODO RW
       }
-    }
-
-    print(X, "X");
-
-    // TODO this seems superflous, but I need it as it is now because I have to reduce for computing W2
-    // and I cannot reduce in diagonal
-    // x broadcast row-wise
-    for (SizeType index_x = 0; index_x < At_size.rows(); ++index_x) {
-      const LocalTileIndex index_tile_x{index_x, 0};
-
-      const auto result_row = dist.globalTileFromLocalTile<Coord::Row>(index_x + At_start.row());
-      const auto rank_owner_col = dist.rankGlobalTile<Coord::Col>(result_row);
-
-      auto broadcast_rowwise_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
-        auto comm_grid = comm_wrapper();
-
-        if (rank_owner_col == rank.col())
-          broadcast::send(comm_grid.rowCommunicator(), make_data(tile_x));
-        else
-          broadcast::receive_from(rank_owner_col, comm_grid.rowCommunicator(), make_data(tile_x));
-      });
-
-      hpx::dataflow(broadcast_rowwise_func, X(index_tile_x), serial_comm()); // TODO RW
     }
 
     print(X, "X");
