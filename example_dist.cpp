@@ -1043,7 +1043,6 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
     // broadcast X rowwise
     auto bcast_x_rowwise_func = unwrapping([rank](auto&& tile_x, auto&& comm_wrapper) {
-      trace("broadcasting Xupd");
       if (0 == rank.col())
         broadcast::send(comm_wrapper().rowCommunicator(), make_data(tile_x));
       else
@@ -1053,15 +1052,38 @@ int miniapp(hpx::program_options::variables_map& vm) {
     for (const auto& index_tile_x : iterate_range2d(X.distribution().localNrTiles()))
       hpx::dataflow(bcast_x_rowwise_func, X(index_tile_x), serial_comm());
 
-    print(X, "Xupd");
+    // broadcast X colwise
+    for (SizeType index_xconj_col = 0; index_xconj_col < At_size.cols(); ++index_xconj_col) {
+      const auto index_tile_k =
+          dist.globalTileFromLocalTile<Coord::Col>(index_xconj_col + At_start.col());
 
-    // TODO broadcast Xupd rowwise/colwise
+      const auto rank_owner = dist.rankGlobalTile<Coord::Row>(index_tile_k);
 
-    // TODO fix problem with non-participating ranks
+      if (rank_owner == rank.row()) {
+        const auto index_x_row = dist.localTileFromGlobalTile<Coord::Row>(index_tile_k) - At_start.row();
+
+        auto bcast_xupd_colwise_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
+          trace("*** send", rank_owner);
+          print_tile(tile_x);
+          broadcast::send(comm_wrapper().colCommunicator(), make_data(tile_x));
+        });
+
+        hpx::dataflow(bcast_xupd_colwise_func, X(LocalTileIndex{index_x_row, 0}), serial_comm());
+      }
+      else {
+        auto bcast_xupd_colwise_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
+          trace("*** recv", rank_owner);
+          broadcast::receive_from(rank_owner, comm_wrapper().colCommunicator(), make_data(tile_x));
+        });
+
+        hpx::dataflow(bcast_xupd_colwise_func, X_conj(LocalTileIndex{0, index_xconj_col}), serial_comm());
+      }
+    }
+
+    print(X, "Xr-upd");
+    print(X_conj, "X_conj-upd");
 
     // TODO fix problem with RW
-
-    break;
 
     // 3E UPDATE
     trace("At", At_start, "size:", At_size);
@@ -1080,8 +1102,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
           // HER2K
           const SizeType index_tile_v{index_tile_at.row() - At_start.row()};
 
-          // const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
-          const dlaf::GlobalTileIndex index_tile_x{index_tile_at_g.col() - At_start_global.col(), 0};
+          const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
 
           auto her2k_func = unwrapping([](auto&& tile_v, auto&& tile_x, auto&& tile_at) {
             trace("HER2K");
@@ -1104,8 +1125,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
         else {
           // GEMM A: X . V*
           {
-            // const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
-            const dlaf::GlobalTileIndex index_tile_x{index_tile_at_g.row() - At_start_global.row(), 0};
+            const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
 
             const SizeType index_tile_v{index_tile_at.col() - At_start.col()};
 
@@ -1132,10 +1152,20 @@ int miniapp(hpx::program_options::variables_map& vm) {
           {
             const SizeType index_tile_v{index_tile_at.row() - At_start.row()};
 
-            // const LocalTileIndex index_tile_x{index_tile_at_local_row - At_start.row(), 0};
-            const dlaf::GlobalTileIndex index_tile_x{index_tile_at_g.col() - At_start_global.col(), 0};
+            const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
 
-            auto gemm_b_func = unwrapping([](auto&& tile_v, auto&& tile_x, auto&& tile_at) {
+            hpx::shared_future<ConstTileType> tile_x;
+            const bool own_x = rank.row() == dist.rankGlobalTile<Coord::Row>(index_tile_at_g.col());
+            if (own_x) {
+              trace("ownx");
+              tile_x = X.read(index_tile_x);
+            }
+            else {
+              trace("not-ownx");
+              tile_x = X_conj.read(LocalTileIndex{0, index_tile_at.col() - At_start.col()});
+            }
+
+            auto gemm_b_func = unwrapping([=](auto&& tile_v, auto&& tile_x, auto&& tile_at) {
               trace("DOUBLE GEMM-2");
 
               // clang-format off
@@ -1150,8 +1180,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
               // clang-format on
             });
 
-            auto tile_x_fut = X.read(index_tile_x);
-            hpx::dataflow(gemm_b_func, V_futures[index_tile_v], tile_x_fut, A(index_tile_at));
+            hpx::dataflow(gemm_b_func, V_futures[index_tile_v], tile_x, A(index_tile_at));
           }
         }
       }
