@@ -876,45 +876,6 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
     trace("REDUCING X", "At size", At_size, "At_start", At_start, "X", X.nrTiles());
 
-    for (SizeType index_x = 0; index_x < At_size.rows(); ++index_x) {
-      const auto index_tile_k = dist.globalTileFromLocalTile<Coord::Row>(index_x + At_start.row());
-
-      const auto rank_owner_col = dist.rankGlobalTile<Coord::Col>(index_tile_k);
-
-      if (rank_owner_col == rank.col()) {
-        auto reduce_x_func = unwrapping([=](auto&& tile_x_conj, auto&& tile_x, auto&& comm_wrapper) {
-          auto comm_grid = comm_wrapper();
-
-          trace("reducing root X row-wise", rank_owner_col, index_tile_k);
-          print_tile(tile_x);
-
-          reduce(rank_owner_col, comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x), make_data(tile_x_conj));
-
-          trace("REDUCED ROW", index_tile_k);
-          print_tile(tile_x_conj);
-        });
-
-        const auto index_x_row = dist.localTileFromGlobalTile<Coord::Col>(index_tile_k) - At_start.col();
-        hpx::dataflow(reduce_x_func, X_conj(LocalTileIndex{0, index_x_row}), X(LocalTileIndex{index_x, 0}), serial_comm()); // TODO RW
-      }
-      else {
-        auto reduce_x_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
-            auto comm_grid = comm_wrapper();
-
-            trace("reducing send X row-wise", rank_owner_col, index_tile_k, "x", index_x);
-            print_tile(tile_x);
-
-            Type fake;
-            reduce(rank_owner_col, comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x), make_data(&fake, 0));
-          });
-
-          hpx::dataflow(reduce_x_func, X(LocalTileIndex{index_x, 0}), serial_comm()); // TODO RW
-        }
-    }
-
-    print(X, "X-rowred");
-    print(X_conj, "X_conj-rowred");
-
     // reducing X col-wise
     for (SizeType index_xconj_col = 0; index_xconj_col < At_size.cols(); ++index_xconj_col) {
       const auto index_tile_k =
@@ -923,28 +884,64 @@ int miniapp(hpx::program_options::variables_map& vm) {
       const auto rank_owner_row = dist.rankGlobalTile<Coord::Row>(index_tile_k);
 
       if (rank_owner_row == rank.row()) {
-        auto reduce_x_func = unwrapping([=](auto&& tile_x_conj, auto&& tile_x, auto&& comm_wrapper) {
+        auto reduce_x_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
           auto comm_grid = comm_wrapper();
 
-          reduce(rank_owner_row, comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x_conj), make_data(tile_x));
+          reduce(rank_owner_row, comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x), make_data(tile_x));
 
           trace("REDUCED COL", index_tile_k);
           print_tile(tile_x);
         });
 
         const auto index_x_row = dist.localTileFromGlobalTile<Coord::Row>(index_tile_k) - At_start.row();
-        hpx::dataflow(reduce_x_func, X_conj(LocalTileIndex{0, index_xconj_col}), X(LocalTileIndex{index_x_row, 0}), serial_comm()); // TODO RW
+        hpx::dataflow(reduce_x_func, X(LocalTileIndex{index_x_row, 0}), serial_comm()); // TODO RW
       }
       else {
         auto reduce_x_func = unwrapping([=](auto&& tile_x_conj, auto&& comm_wrapper) {
-            auto comm_grid = comm_wrapper();
+          auto comm_grid = comm_wrapper();
 
-            Type fake;
-            reduce(rank_owner_row, comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x_conj), make_data(&fake, 0));
-          });
+          Type fake;
+          reduce(rank_owner_row, comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x_conj), make_data(&fake, 0));
+        });
 
-          hpx::dataflow(reduce_x_func, X_conj(LocalTileIndex{0, index_xconj_col}), serial_comm()); // TODO RW
-        }
+        hpx::dataflow(reduce_x_func, X_conj(LocalTileIndex{0, index_xconj_col}), serial_comm()); // TODO RW
+      }
+    }
+
+    for (SizeType index_x = 0; index_x < At_size.rows(); ++index_x) {
+      const auto index_tile_k = dist.globalTileFromLocalTile<Coord::Row>(index_x + At_start.row());
+
+      const auto rank_owner_col = dist.rankGlobalTile<Coord::Col>(index_tile_k);
+
+      if (rank_owner_col == rank.col()) {
+        auto reduce_x_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
+          auto comm_grid = comm_wrapper();
+
+          trace("reducing root X row-wise", rank_owner_col, index_tile_k);
+          print_tile(tile_x);
+
+          reduce(rank_owner_col, comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x), make_data(tile_x));
+
+          trace("REDUCED ROW", index_tile_k);
+          print_tile(tile_x);
+        });
+
+        const auto index_x_row = dist.localTileFromGlobalTile<Coord::Col>(index_tile_k) - At_start.col();
+        hpx::dataflow(reduce_x_func, X(LocalTileIndex{index_x, 0}), serial_comm()); // TODO RW
+      }
+      else {
+        auto reduce_x_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
+          auto comm_grid = comm_wrapper();
+
+          trace("reducing send X row-wise", rank_owner_col, index_tile_k, "x", index_x);
+          print_tile(tile_x);
+
+          Type fake;
+          reduce(rank_owner_col, comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x), make_data(&fake, 0));
+        });
+
+        hpx::dataflow(reduce_x_func, X(LocalTileIndex{index_x, 0}), serial_comm()); // TODO RW
+      }
     }
 
     print(X, "X");
