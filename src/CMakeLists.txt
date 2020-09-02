@@ -115,6 +115,10 @@ target_link_libraries(dlaf.solver PUBLIC dlaf.prop)
 add_library(dlaf.auxiliary OBJECT auxiliary/norm/mc.cpp)
 target_link_libraries(dlaf.auxiliary PUBLIC dlaf.prop)
 
+# Define DLAF's eigensolver library
+add_library(dlaf.eigensolver OBJECT eigensolver/mc.cpp)
+target_link_libraries(dlaf.eigensolver PUBLIC dlaf.prop)
+
 # Define DLAF's complete library
 add_library(DLAF
   $<TARGET_OBJECTS:dlaf.core>
@@ -122,6 +126,7 @@ add_library(DLAF
   $<TARGET_OBJECTS:dlaf.factorization>
   $<TARGET_OBJECTS:dlaf.solver>
   $<TARGET_OBJECTS:dlaf.auxiliary>
+  $<TARGET_OBJECTS:dlaf.eigensolver>
 )
 target_link_libraries(DLAF PUBLIC dlaf.prop)
 target_add_warnings(DLAF)
