@@ -11,6 +11,9 @@
 
 #include <cmath>
 
+#include <hpx/include/util.hpp>
+//#include <hpx/local/future.hpp>
+
 #include "dlaf/common/pipeline.h"
 #include "dlaf/common/vector.h"
 #include "dlaf/communication/communicator_grid.h"
@@ -24,31 +27,18 @@ namespace internal {
 namespace mc {
 
 namespace {
-using dlaf::Coord;
-using dlaf::LocalElementSize;
-using dlaf::LocalTileIndex;
-using dlaf::LocalTileSize;
-using dlaf::GlobalElementSize;
-using dlaf::GlobalTileSize;
-using dlaf::SizeType;
-using dlaf::TileElementSize;
-using dlaf::TileElementIndex;
-using dlaf::comm::Communicator;
-using dlaf::comm::CommunicatorGrid;
-using dlaf::comm::Index2D;
-using dlaf::comm::IndexT_MPI;
 
 template <class Type>
-using MatrixType = dlaf::Matrix<Type, dlaf::Device::CPU>;
+using MatrixType = Matrix<Type, Device::CPU>;
 template <class Type>
-using ConstMatrixType = dlaf::Matrix<const Type, dlaf::Device::CPU>;
+using ConstMatrixType = Matrix<const Type, Device::CPU>;
 template <class Type>
-using TileType = dlaf::Tile<Type, dlaf::Device::CPU>;
+using TileType = Tile<Type, Device::CPU>;
 template <class Type>
-using ConstTileType = dlaf::Tile<const Type, dlaf::Device::CPU>;
+using ConstTileType = Tile<const Type, Device::CPU>;
 
 template <class Type>
-using MemoryViewType = dlaf::memory::MemoryView<Type, dlaf::Device::CPU>;
+using MemoryViewType = memory::MemoryView<Type, Device::CPU>;
 
 template <class T>
 void print(ConstMatrixType<T>& matrix, std::string prefix = "");
@@ -86,31 +76,29 @@ struct ReflectorParams {
 // Distributed implementation of reduction to band
 template <class Type>
 void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& mat_a) {
+  using common::iterate_range2d;
+  using common::make_data;
+  using hpx::util::unwrapping;
+
+  using namespace comm;
+  using namespace comm::sync;
+
   const auto& dist = mat_a.distribution();
   const auto rank = dist.rankIndex();
 
   const SizeType nb = mat_a.blockSize().rows();
 
-  dlaf::common::Pipeline<CommunicatorGrid> serial_comm(std::move(grid));
-
-  using dlaf::common::iterate_range2d;
-  using dlaf::common::make_data;
-  using hpx::util::unwrapping;
-
-  using namespace dlaf::comm::sync;
+  common::Pipeline<comm::CommunicatorGrid> serial_comm(std::move(grid));
 
   // for each reflector panel
   for (SizeType j_panel = 0; j_panel < (dist.nrTiles().cols() - 1); ++j_panel) {
     MatrixType<Type> T(LocalElementSize{nb, nb}, dist.blockSize());   // used just by the column
     MatrixType<Type> V0(LocalElementSize{nb, nb}, dist.blockSize());  // used just by the owner
 
-    const dlaf::GlobalTileIndex Ai_start_global{j_panel + 1, j_panel};
-    const dlaf::GlobalTileIndex At_start_global{Ai_start_global + GlobalTileSize{0, 1}};
+    const GlobalTileIndex Ai_start_global{j_panel + 1, j_panel};
+    const GlobalTileIndex At_start_global{Ai_start_global + GlobalTileSize{0, 1}};
 
-    const dlaf::GlobalTileSize At_size_global{dist.nrTiles().rows() - At_start_global.row(),
-                                              dist.nrTiles().cols() - At_start_global.col()};
-
-    const auto rank_v0 = dist.rankGlobalTile(Ai_start_global);
+    const comm::Index2D rank_v0 = dist.rankGlobalTile(Ai_start_global);
 
     const LocalTileIndex Ai_start{
         dist.template nextLocalTileFromGlobalTile<Coord::Row>(Ai_start_global.row()),
@@ -126,7 +114,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
 
     // 1. PANEL
     if (rank_v0.col() == rank.col()) {
-      dlaf::matrix::util::set(T, [](auto&&) { return 0; });
+      matrix::util::set(T, [](auto&&) { return 0; });
 
       const SizeType Ai_start_row_el_global =
           dist.template globalElementFromGlobalTileAndTileElement<Coord::Row>(Ai_start_global.row(), 0);
@@ -289,7 +277,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
         if (index_el_x0.col() < nb - 1) {
           // 1B/1 Compute W
           MatrixType<Type> W({1, nb}, dist.blockSize());
-          dlaf::matrix::util::set(W, [](auto&&) { return 0; });
+          matrix::util::set(W, [](auto&&) { return 0; });
 
           for (const LocalTileIndex& index_tile_a : iterate_range2d(Ai_start, Ai_size)) {
             const SizeType index_tile_a_global =
@@ -469,7 +457,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
 
                   // compute first component with implicit one
                   for (const auto& index_el_t : iterate_range2d(T_start, T_size)) {
-                    const auto index_el_va = dlaf::common::internal::transposed(index_el_t);
+                    const auto index_el_va = common::internal::transposed(index_el_t);
                     tile_t(index_el_t) = -tau * tile_v(index_el_va);
 
                     trace("tile_t", tile_t(index_el_t), -tau, tile_v(index_el_va));
@@ -511,7 +499,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
                 auto&& output_t = make_data(out_data.data(), T_size.rows());
                 // TODO reduce just the current, otherwise reduce all together
                 reduce(rank_v0.row(), comm_wrapper().colCommunicator(), MPI_SUM, input_t, output_t);
-                dlaf::common::copy(output_t, input_t);
+                common::copy(output_t, input_t);
                 trace("reducing", T_start, T_size.rows(), *tile_t.ptr());
               });
 
@@ -584,7 +572,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
 
     // communicate V row-wise
     MatrixType<Type> V({Ai_size.rows() * nb, Ai_size.cols() * nb}, dist.blockSize());
-    dlaf::common::internal::vector<hpx::shared_future<ConstTileType<Type>>> V_futures;
+    common::internal::vector<hpx::shared_future<ConstTileType<Type>>> V_futures;
     V_futures.reserve(Ai_size.rows());
 
     if (rank_v0.col() == rank.col()) {
@@ -622,7 +610,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
 
     // communicate V* col-wise
     MatrixType<Type> V_conj({Ai_size.cols() * nb, At_size.cols() * nb}, dist.blockSize());
-    dlaf::common::internal::vector<hpx::shared_future<ConstTileType<Type>>> V_conj_futures;
+    common::internal::vector<hpx::shared_future<ConstTileType<Type>>> V_conj_futures;
     V_conj_futures.reserve(At_size.cols());
 
     for (SizeType index_v = 0; index_v < At_size.cols(); ++index_v) {
@@ -713,8 +701,8 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
 
     // W* bcast col-wise
     MatrixType<Type> W_conj({nb, At_size.cols() * nb}, dist.blockSize());
-    dlaf::matrix::util::set(W_conj,
-                            [](auto&&) { return 0; });  // TODO superflous? not used here, not use later?
+    matrix::util::set(W_conj,
+                      [](auto&&) { return 0; });  // TODO superflous? not used here, not use later?
 
     for (const LocalTileIndex index_tile_xconj : iterate_range2d(W_conj.distribution().localNrTiles())) {
       const auto index_k =
@@ -748,17 +736,17 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
     MatrixType<Type> X_conj({nb, (At_size.cols() != 0 ? At_size.cols() : 1) * nb}, dist.blockSize());
 
     // TODO maybe it may be enough doing it if (At_size.isEmpty())
-    dlaf::matrix::util::set(X, [](auto&&) { return 0; });
-    dlaf::matrix::util::set(X_conj, [](auto&&) { return 0; });
+    matrix::util::set(X, [](auto&&) { return 0; });
+    matrix::util::set(X_conj, [](auto&&) { return 0; });
 
     // HEMM X = At . W
     for (SizeType i_t = At_start.row(); i_t < dist.localNrTiles().rows(); ++i_t) {
-      const auto limit = dist.template nextLocalTileFromGlobalTile<Coord::Col>(
+      const IndexT_MPI limit = dist.template nextLocalTileFromGlobalTile<Coord::Col>(
           dist.template globalTileFromLocalTile<Coord::Row>(i_t) + 1);
       for (SizeType j_t = At_start.col(); j_t < limit; ++j_t) {
         const LocalTileIndex index_tile_at{i_t, j_t};
 
-        const auto index_tile_at_g = dist.globalTileIndex(index_tile_at);
+        const GlobalTileIndex index_tile_at_g = dist.globalTileIndex(index_tile_at);
         const bool is_diagonal_tile = (index_tile_at_g.row() == index_tile_at_g.col());
 
         if (is_diagonal_tile) {
@@ -969,7 +957,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
 
     // 3C COMPUTE W2
     MatrixType<Type> W2 = std::move(T);
-    dlaf::matrix::util::set(W2, [](auto&&) { return 0; });
+    matrix::util::set(W2, [](auto&&) { return 0; });
 
     if (0 == rank.col()) {
       // GEMM W2 = W* . X
@@ -1076,12 +1064,12 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
 
     // HER2K At = At - X . V* + V . X*
     for (SizeType i_t = At_start.row(); i_t < dist.localNrTiles().rows(); ++i_t) {
-      const auto limit = dist.template nextLocalTileFromGlobalTile<Coord::Col>(
+      const IndexT_MPI limit = dist.template nextLocalTileFromGlobalTile<Coord::Col>(
           dist.template globalTileFromLocalTile<Coord::Row>(i_t) + 1);
       for (SizeType j_t = At_start.col(); j_t < limit; ++j_t) {
         const LocalTileIndex index_tile_at{i_t, j_t};
 
-        const auto index_tile_at_g = dist.globalTileIndex(index_tile_at);
+        const GlobalTileIndex index_tile_at_g = dist.globalTileIndex(index_tile_at);
         const bool is_diagonal_tile = (index_tile_at_g.row() == index_tile_at_g.col());
 
         if (is_diagonal_tile) {
@@ -1179,7 +1167,7 @@ namespace {
 
 template <class Type>
 void print(ConstMatrixType<Type>& matrix, std::string prefix) {
-  using dlaf::common::iterate_range2d;
+  using common::iterate_range2d;
 
   const auto& distribution = matrix.distribution();
 
@@ -1190,7 +1178,7 @@ void print(ConstMatrixType<Type>& matrix, std::string prefix) {
     const auto& tile = matrix.read(index_tile).get();
 
     for (const auto& index_el : iterate_range2d(tile.size())) {
-      dlaf::GlobalElementIndex index_g{
+      GlobalElementIndex index_g{
           distribution.template globalElementFromLocalTileAndTileElement<Coord::Row>(index_tile.row(),
                                                                                      index_el.row()),
           distribution.template globalElementFromLocalTileAndTileElement<Coord::Col>(index_tile.col(),

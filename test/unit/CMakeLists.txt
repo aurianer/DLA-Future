@@ -49,5 +49,6 @@ add_subdirectory(memory)
 
 # Operations
 add_subdirectory(auxiliary)
+add_subdirectory(eigensolver)
 add_subdirectory(factorization)
 add_subdirectory(solver)
