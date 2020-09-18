@@ -188,9 +188,9 @@ TYPED_TEST(BacktransfSolverLocalTest, Correctness) {
 
   // Matrix T
   auto el_t = [beta, gamma](const GlobalElementIndex& index) {
-    SizeType l = index.row();
+    //    SizeType l = index.row();
     SizeType i = index.col();
-    // SizeType l = 0.0;
+    SizeType l = 0.0;
 
     TypeParam el =
         TypeUtilities<TypeParam>::polar(gamma / (std::exp2(2 * i - 2 * l)), beta * (2 * i - 2 * l));

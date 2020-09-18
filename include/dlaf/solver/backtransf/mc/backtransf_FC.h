@@ -74,49 +74,48 @@ void backtransf_FC(Matrix<T, Device::CPU>& mat_c, Matrix<const T, Device::CPU>& 
     Matrix<T, Device::CPU> mat_w2(std::move(dist), layout);
     // ...and fill it with zeros
     for (SizeType w2_col = 0; w2_col < n; ++w2_col) {
-          for (SizeType w2_row = 0; w2_row < m; ++w2_row) {
-	    auto tile_index = LocalTileIndex(w2_row, w2_col);
-	    auto el_zero = []() {
-	      return static_cast<T>(0.0);
- 	    };
-	    auto tile = mat_w2(tile_index).get();
-	    for (SizeType w2_j = 0; w2_j < nb; ++w2_j) {
-	      for (SizeType w2_i = 0; w2_i < mb; ++w2_i) {
-		TileElementIndex index(w2_i, w2_j);
-		tile(index) = el_zero();
-	      }
-	    }
-
+      for (SizeType w2_row = 0; w2_row < m; ++w2_row) {
+	auto tile_index = LocalTileIndex(w2_row, w2_col);
+	auto el_zero = []() {
+	  return static_cast<T>(0.0);
+	};
+	auto tile = mat_w2(tile_index).get();
+	for (SizeType w2_j = 0; w2_j < nb; ++w2_j) {
+	  for (SizeType w2_i = 0; w2_i < mb; ++w2_i) {
+	    TileElementIndex index(w2_i, w2_j);
+	    tile(index) = el_zero();
 	  }
+	}
+      }
     }
     
     for (SizeType k = i; k < m; ++k) {
       auto ki = LocalTileIndex{k, i};
       auto kk = LocalTileIndex{k, k};
-      // W = V T (W --> T)
+      // W = V T 
       hpx::dataflow(executor_hp, hpx::util::unwrapping(tile::trmm<T, Device::CPU>), Left, Upper, NoTrans,
                     NonUnit, 1.0, mat_v.read(ki), std::move(mat_t(ki)));
     }
 
     for (SizeType k = i; k < m; ++k) {
-      auto ki = LocalTileIndex{k, i};
+      auto ik = LocalTileIndex{i, k};
       for (SizeType j = i; j < n; ++j) {
         auto ji = LocalTileIndex{j, i};
         auto jk = LocalTileIndex{j, k};
         // W2 = WH C
         hpx::dataflow(executor_normal, hpx::util::unwrapping(tile::gemm<T, Device::CPU>), NoTrans,
-                      NoTrans, 1.0, std::move(mat_t(ji)), mat_c.read(jk), 1.0, std::move(mat_w2(ki)));
+                      NoTrans, 1.0, std::move(mat_t(ji)), mat_c.read(jk), 1.0, std::move(mat_w2(ik)));
       }
     }
 
     for (SizeType k = i; k < m; ++k) {
       auto ki = LocalTileIndex{k, i};
       for (SizeType j = i; j < n; ++j) {
-        auto ji = LocalTileIndex{j, i};
+        auto ij = LocalTileIndex{i, j};
         auto kj = LocalTileIndex{k, j};
         // C = C - V W2
         hpx::dataflow(executor_normal, hpx::util::unwrapping(tile::gemm<T, Device::CPU>), NoTrans,
-                      NoTrans, -1.0, mat_v.read(ki), mat_w2.read(ji), 1.0, std::move(mat_c(kj)));
+                      NoTrans, -1.0, mat_v.read(ki), mat_w2.read(ij), 1.0, std::move(mat_c(kj)));
       }
     }
   }
