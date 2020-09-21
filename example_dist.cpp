@@ -37,11 +37,11 @@ int miniapp(hpx::program_options::variables_map& vm) {
   dlaf::Matrix<Type, dlaf::Device::CPU> mat_a(matrix_size, block_size, comm_grid);
   dlaf::matrix::util::set_random_hermitian(mat_a);
 
-  print(mat_a, "A");
+  print(mat_a, "matA");
 
   dlaf::EigenSolver<dlaf::Backend::MC>::reduction_to_band(comm_grid, mat_a);
 
-  print(mat_a, "in-place A");
+  print(mat_a, "Z");
 
   return hpx::finalize();
 }
