@@ -1097,18 +1097,28 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
     print(W_conj, "W_conj");
 
     // 3B COMPUTE X
+    /*
+     * Since At is hermitian, just the lower part is referenced.
+     * When the tile is not part of the main diagonal, the same tile has to be used for two computations
+     * that will contribute to two different rows of X: the ones indexed with row and col.
+     * This is achieved by storing the two results in two different workspaces for X, X and X_conj respectively.
+     */
     MatrixType<Type> X({(At_size.rows() != 0 ? At_size.rows() : 1) * nb, nb}, dist.blockSize());
-    MatrixType<Type> X_conj({nb, (At_size.cols() != 0 ? At_size.cols() : 1) * nb}, dist.blockSize());
+    MatrixType<Type> Xcols({nb, (At_size.cols() != 0 ? At_size.cols() : 1) * nb}, dist.blockSize());
 
     // TODO maybe it may be enough doing it if (At_size.isEmpty())
     matrix::util::set(X, [](auto&&) { return 0; });
-    matrix::util::set(X_conj, [](auto&&) { return 0; });
+    matrix::util::set(Xcols, [](auto&&) { return 0; });
 
     // HEMM X = At . W
-    compute_x(At_start, mat_a, W, W_conj, X, X_conj);
+    compute_x(At_start, mat_a, W, W_conj, X, Xcols);
 
-    print(X, "X");
-    print(X_conj, "X_conj");
+    print(X, "Xpre-rows");
+    print(Xcols, "Xpre-cols");
+
+    /*
+     * The result for X has to be reduced using both Xrows and Xcols.
+     */
 
     trace("REDUCING X", "At size", At_size, "At_start", At_start, "X", X.nrTiles());
 
@@ -1143,7 +1153,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
                  make_data(&fake, 0));
         });
 
-        hpx::dataflow(reduce_x_func, X_conj(LocalTileIndex{0, index_xconj_col}),
+        hpx::dataflow(reduce_x_func, Xcols(LocalTileIndex{0, index_xconj_col}),
                       serial_comm());  // TODO RW
       }
     }
@@ -1161,7 +1171,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
           trace("reducing root X row-wise", rank_owner_col, index_tile_k);
           print_tile(tile_x);
 
-          reduce(0, comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x), make_data(tile_x));
+          reduce(rank_v0.col(), comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x), make_data(tile_x));
 
           trace("REDUCED ROW", index_tile_k);
           print_tile(tile_x);
@@ -1178,17 +1188,20 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
           trace("reducing send X row-wise", rank_owner_col, index_tile_k, "x", index_x);
           print_tile(tile_x);
 
-          reduce(0, comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x), make_data(tile_x));
+          reduce(rank_v0.col(), comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x), make_data(tile_x));
         });
 
         hpx::dataflow(reduce_x_func, X(LocalTileIndex{index_x, 0}), serial_comm());  // TODO RW
       }
     }
 
-    print(X, "X");
-
     // 3C COMPUTE W2
-    if (0 == rank.col()) {
+    /*
+     * W2 can be computed by the first column only, which is the only one that has the X result
+     */
+    if (rank_v0.col() == rank.col()) {
+      print(X, "Xpre");
+
       MatrixType<Type> W2 = std::move(T);
       matrix::util::set(W2, [](auto&&) { return 0; });
 
@@ -1199,15 +1212,25 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
       // 3D UPDATE X
       update_x(X, W2, V_futures);
 
-      print(X, "XUpd");
+      print(X, "X");
     }
 
+    /*
+     * Then the X has to be communicated to everyone, since it will be used by all ranks
+     * in the last step for updating the trailing matrix.
+     *
+     * Each cell of the lower part of At, in order to be updated, requires both the X from the
+     * row and from the column (because it will use the transposed X).
+     *
+     * So, as first step each row i will get the X(i) tile, then each column j will get the X(j)
+     */
+
     // broadcast X rowwise
-    auto bcast_x_rowwise_func = unwrapping([rank](auto&& tile_x, auto&& comm_wrapper) {
-      if (0 == rank.col())
+    auto bcast_x_rowwise_func = unwrapping([rank_v0, rank](auto&& tile_x, auto&& comm_wrapper) {
+      if (rank_v0.col() == rank.col())
         broadcast::send(comm_wrapper().rowCommunicator(), make_data(tile_x));
       else
-        broadcast::receive_from(0, comm_wrapper().rowCommunicator(), make_data(tile_x));
+        broadcast::receive_from(rank_v0.col(), comm_wrapper().rowCommunicator(), make_data(tile_x));
     });
 
     for (const auto& index_tile_x : iterate_range2d(X.distribution().localNrTiles()))
@@ -1218,36 +1241,39 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
       const auto index_tile_k =
           dist.template globalTileFromLocalTile<Coord::Col>(index_xconj_col + At_start.col());
 
-      const auto rank_owner = dist.template rankGlobalTile<Coord::Row>(index_tile_k);
+      const SizeType rank_owner = dist.template rankGlobalTile<Coord::Row>(index_tile_k);
 
       if (rank_owner == rank.row()) {
-        const auto index_x_row =
+        const SizeType index_x_row =
             dist.template localTileFromGlobalTile<Coord::Row>(index_tile_k) - At_start.row();
 
         auto bcast_xupd_colwise_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
-          broadcast::send(comm_wrapper().colCommunicator(), make_data(tile_x));
+            trace("sending tile_x");
+            print_tile(tile_x);
+            broadcast::send(comm_wrapper().colCommunicator(), make_data(tile_x));
         });
 
         hpx::dataflow(bcast_xupd_colwise_func, X(LocalTileIndex{index_x_row, 0}), serial_comm());
       }
       else {
         auto bcast_xupd_colwise_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
-          broadcast::receive_from(rank_owner, comm_wrapper().colCommunicator(), make_data(tile_x));
+            broadcast::receive_from(rank_owner, comm_wrapper().colCommunicator(), make_data(tile_x));
+            trace("received tile_x");
+            print_tile(tile_x);
         });
 
-        hpx::dataflow(bcast_xupd_colwise_func, X_conj(LocalTileIndex{0, index_xconj_col}),
-                      serial_comm());
+        hpx::dataflow(bcast_xupd_colwise_func, Xcols(LocalTileIndex{0, index_xconj_col}), serial_comm());
       }
     }
 
-    print(X, "Xr-upd");
-    print(X_conj, "X_conj-upd");
+    print(X, "Xrows");
+    print(Xcols, "Xcols");
 
     // 3E UPDATE
     trace("At", At_start, "size:", At_size);
 
     // HER2K At = At - X . V* + V . X*
-    update_a(At_start, mat_a, X, X_conj, V_futures, V_conj_futures);
+    update_a(At_start, mat_a, X, Xcols, V_futures, V_conj_futures);
   }
 }
 
