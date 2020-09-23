@@ -83,20 +83,20 @@ void compute_w(ConstMatrixType<Type>& T,
   for (const auto& index_tile_w : iterate_range2d(W.distribution().localNrTiles())) {
     auto trmm_func = unwrapping([](auto&& tile_v, auto&& tile_t, auto&& tile_w) {
       // clang-format off
-        lapack::lacpy(lapack::MatrixType::General,
-            tile_v.size().rows(), tile_v.size().cols(),
-            tile_v.ptr(), tile_v.ld(),
-            tile_w.ptr(), tile_w.ld());
+      lapack::lacpy(lapack::MatrixType::General,
+          tile_v.size().rows(), tile_v.size().cols(),
+          tile_v.ptr(), tile_v.ld(),
+          tile_w.ptr(), tile_w.ld());
       // clang-format on
 
       // W = V . T
       // clang-format off
-        blas::trmm(blas::Layout::ColMajor,
-            blas::Side::Right, blas::Uplo::Upper, blas::Op::NoTrans, blas::Diag::NonUnit,
-            tile_w.size().rows(), tile_w.size().cols(),
-            Type(1),
-            tile_t.ptr(), tile_t.ld(),
-            tile_w.ptr(), tile_w.ld());
+      blas::trmm(blas::Layout::ColMajor,
+          blas::Side::Right, blas::Uplo::Upper, blas::Op::NoTrans, blas::Diag::NonUnit,
+          tile_w.size().rows(), tile_w.size().cols(),
+          Type(1),
+          tile_t.ptr(), tile_t.ld(),
+          tile_w.ptr(), tile_w.ld());
       // clang-format on
 
       return std::move(tile_w);
@@ -218,14 +218,14 @@ void compute_x(const LocalTileIndex At_start, ConstMatrixType<Type>& mat_a, Cons
             print_tile(tile_x);
 
             // clang-format off
-              blas::gemm(blas::Layout::ColMajor,
-                  blas::Op::ConjTrans, blas::Op::NoTrans,
-                  tile_a.size().rows(), tile_w.size().cols(), tile_a.size().cols(),
-                  Type(1),
-                  tile_a.ptr(), tile_a.ld(),
-                  tile_w.ptr(), tile_w.ld(),
-                  Type(1),
-                  tile_x.ptr(), tile_x.ld());
+            blas::gemm(blas::Layout::ColMajor,
+                blas::Op::ConjTrans, blas::Op::NoTrans,
+                tile_a.size().rows(), tile_w.size().cols(), tile_a.size().cols(),
+                Type(1),
+                tile_a.ptr(), tile_a.ld(),
+                tile_w.ptr(), tile_w.ld(),
+                Type(1),
+                tile_x.ptr(), tile_x.ld());
             // clang-format on
 
             trace("*tile_x");
@@ -344,30 +344,30 @@ void update_a(const LocalTileIndex At_start, MatrixType<Type>& mat_a, ConstMatri
         const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
 
         auto her2k_func = unwrapping([](auto&& tile_v, auto&& tile_x, auto&& tile_at) {
-            trace("HER2K");
+          trace("HER2K");
 
-            std::cout << "tile_v\n";
-            print_tile(tile_v);
+          std::cout << "tile_v\n";
+          print_tile(tile_v);
 
-            std::cout << "tile_x\n";
-            print_tile(tile_x);
+          std::cout << "tile_x\n";
+          print_tile(tile_x);
 
-            std::cout << "tile_at\n";
-            print_tile(tile_at);
+          std::cout << "tile_at\n";
+          print_tile(tile_at);
 
-            // clang-format off
-            blas::her2k(blas::Layout::ColMajor,
-                blas::Uplo::Lower, blas::Op::NoTrans,
-                tile_at.size().rows(), tile_v.size().cols(),
-                Type(-1),
-                tile_v.ptr(), tile_v.ld(),
-                tile_x.ptr(), tile_x.ld(),
-                Type(1),
-                tile_at.ptr(), tile_at.ld());
-            // clang-format on
+          // clang-format off
+          blas::her2k(blas::Layout::ColMajor,
+              blas::Uplo::Lower, blas::Op::NoTrans,
+              tile_at.size().rows(), tile_v.size().cols(),
+              Type(-1),
+              tile_v.ptr(), tile_v.ld(),
+              tile_x.ptr(), tile_x.ld(),
+              Type(1),
+              tile_at.ptr(), tile_at.ld());
+          // clang-format on
 
-            std::cout << "tile_at*\n";
-            print_tile(tile_at);
+          std::cout << "tile_at*\n";
+          print_tile(tile_at);
         });
 
         auto tile_x_fut = X.read(index_tile_x);
@@ -381,30 +381,30 @@ void update_a(const LocalTileIndex At_start, MatrixType<Type>& mat_a, ConstMatri
           const SizeType index_tile_v{index_tile_at.col() - At_start.col()};
 
           auto gemm_a_func = unwrapping([](auto&& tile_x, auto&& tile_v, auto&& tile_at) {
-              trace("DOUBLE GEMM-1");
+            trace("DOUBLE GEMM-1");
 
-              std::cout << "tile_x\n";
-              print_tile(tile_x);
+            std::cout << "tile_x\n";
+            print_tile(tile_x);
 
-              std::cout << "tile_v\n";
-              print_tile(tile_v);
+            std::cout << "tile_v\n";
+            print_tile(tile_v);
 
-              std::cout << "tile_at\n";
-              print_tile(tile_at);
+            std::cout << "tile_at\n";
+            print_tile(tile_at);
 
-              // clang-format off
-              blas::gemm(blas::Layout::ColMajor,
-                  blas::Op::NoTrans, blas::Op::ConjTrans,
-                  tile_at.size().rows(), tile_at.size().cols(), tile_x.size().rows(),
-                  Type(-1),
-                  tile_x.ptr(), tile_x.ld(),
-                  tile_v.ptr(), tile_v.ld(),
-                  Type(1),
-                  tile_at.ptr(), tile_at.ld());
-              // clang-format on
+            // clang-format off
+            blas::gemm(blas::Layout::ColMajor,
+                blas::Op::NoTrans, blas::Op::ConjTrans,
+                tile_at.size().rows(), tile_at.size().cols(), tile_x.size().rows(),
+                Type(-1),
+                tile_x.ptr(), tile_x.ld(),
+                tile_v.ptr(), tile_v.ld(),
+                Type(1),
+                tile_at.ptr(), tile_at.ld());
+            // clang-format on
 
-              std::cout << "tile_at*\n";
-              print_tile(tile_at);
+            std::cout << "tile_at*\n";
+            print_tile(tile_at);
           });
 
           auto tile_x_fut = X.read(index_tile_x);
@@ -426,30 +426,30 @@ void update_a(const LocalTileIndex At_start, MatrixType<Type>& mat_a, ConstMatri
             tile_x = X_conj.read(index_tile_x);
 
           auto gemm_b_func = unwrapping([=](auto&& tile_v, auto&& tile_x, auto&& tile_at) {
-              trace("DOUBLE GEMM-2");
+            trace("DOUBLE GEMM-2");
 
-              std::cout << "tile_v\n";
-              print_tile(tile_v);
+            std::cout << "tile_v\n";
+            print_tile(tile_v);
 
-              std::cout << "tile_x\n";
-              print_tile(tile_x);
+            std::cout << "tile_x\n";
+            print_tile(tile_x);
 
-              std::cout << "tile_at\n";
-              print_tile(tile_at);
+            std::cout << "tile_at\n";
+            print_tile(tile_at);
 
-              // clang-format off
-              blas::gemm(blas::Layout::ColMajor,
-                  blas::Op::NoTrans, blas::Op::ConjTrans,
-                  tile_at.size().rows(), tile_at.size().cols(), tile_x.size().rows(),
-                  Type(-1), // TODO check this
-                  tile_v.ptr(), tile_v.ld(),
-                  tile_x.ptr(), tile_x.ld(),
-                  Type(1),
-                  tile_at.ptr(), tile_at.ld());
-              // clang-format on
+            // clang-format off
+            blas::gemm(blas::Layout::ColMajor,
+                blas::Op::NoTrans, blas::Op::ConjTrans,
+                tile_at.size().rows(), tile_at.size().cols(), tile_x.size().rows(),
+                Type(-1), // TODO check this
+                tile_v.ptr(), tile_v.ld(),
+                tile_x.ptr(), tile_x.ld(),
+                Type(1),
+                tile_at.ptr(), tile_at.ld());
+            // clang-format on
 
-              std::cout << "tile_at*\n";
-              print_tile(tile_at);
+            std::cout << "tile_at*\n";
+            print_tile(tile_at);
           });
 
           hpx::dataflow(gemm_b_func, V_futures[index_tile_v], tile_x, mat_a(index_tile_at));
@@ -967,7 +967,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
     if (rank_v0.col() == rank.col()) {
       // TODO Avoid useless communication
       auto send_bcast_f = unwrapping([](auto&& tile_v, auto&& comm_wrapper) {
-          std::cout << "Vsend" << std::endl;
+        std::cout << "Vsend" << std::endl;
         print_tile(tile_v);
         broadcast::send(comm_wrapper().rowCommunicator(), tile_v);
       });
@@ -1171,7 +1171,8 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
           trace("reducing root X row-wise", rank_owner_col, index_tile_k);
           print_tile(tile_x);
 
-          reduce(rank_v0.col(), comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x), make_data(tile_x));
+          reduce(rank_v0.col(), comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x),
+                 make_data(tile_x));
 
           trace("REDUCED ROW", index_tile_k);
           print_tile(tile_x);
@@ -1188,7 +1189,8 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
           trace("reducing send X row-wise", rank_owner_col, index_tile_k, "x", index_x);
           print_tile(tile_x);
 
-          reduce(rank_v0.col(), comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x), make_data(tile_x));
+          reduce(rank_v0.col(), comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x),
+                 make_data(tile_x));
         });
 
         hpx::dataflow(reduce_x_func, X(LocalTileIndex{index_x, 0}), serial_comm());  // TODO RW
@@ -1248,18 +1250,18 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
             dist.template localTileFromGlobalTile<Coord::Row>(index_tile_k) - At_start.row();
 
         auto bcast_xupd_colwise_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
-            trace("sending tile_x");
-            print_tile(tile_x);
-            broadcast::send(comm_wrapper().colCommunicator(), make_data(tile_x));
+          trace("sending tile_x");
+          print_tile(tile_x);
+          broadcast::send(comm_wrapper().colCommunicator(), make_data(tile_x));
         });
 
         hpx::dataflow(bcast_xupd_colwise_func, X(LocalTileIndex{index_x_row, 0}), serial_comm());
       }
       else {
         auto bcast_xupd_colwise_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
-            broadcast::receive_from(rank_owner, comm_wrapper().colCommunicator(), make_data(tile_x));
-            trace("received tile_x");
-            print_tile(tile_x);
+          broadcast::receive_from(rank_owner, comm_wrapper().colCommunicator(), make_data(tile_x));
+          trace("received tile_x");
+          print_tile(tile_x);
         });
 
         hpx::dataflow(bcast_xupd_colwise_func, Xcols(LocalTileIndex{0, index_xconj_col}), serial_comm());
