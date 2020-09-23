@@ -380,8 +380,18 @@ void update_a(const LocalTileIndex At_start, MatrixType<Type>& mat_a, ConstMatri
 
           const SizeType index_tile_v{index_tile_at.col() - At_start.col()};
 
-          auto gemm_a_func = unwrapping([](auto&& tile_x, auto&& tile_v, auto&& tile_at) {
-            trace("DOUBLE GEMM-1");
+          hpx::shared_future<ConstTileType<Type>> tile_v;
+          const bool own_v =
+              rank.row() == dist.template rankGlobalTile<Coord::Row>(index_tile_at_g.col());
+          if (own_v) {
+            const auto index_v_loc = dist.template localTileFromGlobalTile<Coord::Row>(index_tile_at_g.col()) - At_start.row();
+            tile_v = V_futures[index_v_loc];
+          }
+          else
+            tile_v = V_conj_futures[index_tile_v];
+
+          auto gemm_a_func = unwrapping([=](auto&& tile_x, auto&& tile_v, auto&& tile_at) {
+            trace("DOUBLE GEMM-1", own_v, index_tile_v);
 
             std::cout << "tile_x\n";
             print_tile(tile_x);
@@ -408,7 +418,7 @@ void update_a(const LocalTileIndex At_start, MatrixType<Type>& mat_a, ConstMatri
           });
 
           auto tile_x_fut = X.read(index_tile_x);
-          hpx::dataflow(gemm_a_func, tile_x_fut, V_conj_futures[index_tile_v], mat_a(index_tile_at));
+          hpx::dataflow(gemm_a_func, tile_x_fut, tile_v, mat_a(index_tile_at));
         }
 
         // GEMM A: V . X*
@@ -420,13 +430,15 @@ void update_a(const LocalTileIndex At_start, MatrixType<Type>& mat_a, ConstMatri
           hpx::shared_future<ConstTileType<Type>> tile_x;
           const bool own_x =
               rank.row() == dist.template rankGlobalTile<Coord::Row>(index_tile_at_g.col());
-          if (own_x)
-            tile_x = X.read(index_tile_x);
+          if (own_x) {
+            const auto index_x_loc = dist.template localTileFromGlobalTile<Coord::Row>(index_tile_at_g.col()) - At_start.row();
+            tile_x = X.read(LocalTileIndex{index_x_loc, 0});
+          }
           else
             tile_x = X_conj.read(index_tile_x);
 
           auto gemm_b_func = unwrapping([=](auto&& tile_v, auto&& tile_x, auto&& tile_at) {
-            trace("DOUBLE GEMM-2");
+            trace("DOUBLE GEMM-2", own_x, index_tile_x);
 
             std::cout << "tile_v\n";
             print_tile(tile_v);
@@ -499,6 +511,8 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
     };
     const LocalTileSize At_size{Ai_size.rows(), dist.localNrTiles().cols() - At_start.col()};
 
+    print(mat_a, std::string("A_input") + std::to_string(j_panel));
+
     // 1. PANEL
     if (rank_v0.col() == rank.col()) {
       matrix::util::set(T, [](auto&&) { return 0; });
@@ -509,8 +523,6 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
 
       trace(">>> COMPUTING panel");
       trace(">>> Ai", Ai_size, Ai_start);
-
-      print(mat_a, std::string("A_input") + std::to_string(j_panel));
 
       // for each column in the panel, compute reflector and update panel
       // if reflector would be just the first 1, skip the last column
@@ -958,6 +970,14 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
 
       print(T, std::string("T") + std::to_string(j_panel));
     }
+
+    /*
+     * V is computed on the first column, than everyone has to know the ones corresponding to
+     * its row and column.
+     *
+     * So, every rank receives the former from his row (from the rank the on in the v0 column)
+     * and then the column can receive the letter from the diagonal one
+     */
 
     // communicate V row-wise
     MatrixType<Type> V({Ai_size.rows() * nb, Ai_size.cols() * nb}, dist.blockSize());
