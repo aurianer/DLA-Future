@@ -415,20 +415,15 @@ void update_a(const LocalTileIndex At_start, MatrixType<Type>& mat_a, ConstMatri
         {
           const SizeType index_tile_v{index_tile_at.row() - At_start.row()};
 
-          // FIXME: THE BUG SEEMS TO BE HERE IN THE SELECTION OF tile_x
-          const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
+          const LocalTileIndex index_tile_x{index_tile_at.col() - At_start.col(), 0};
 
           hpx::shared_future<ConstTileType<Type>> tile_x;
           const bool own_x =
               rank.row() == dist.template rankGlobalTile<Coord::Row>(index_tile_at_g.col());
-          if (own_x) {
-            trace("ownx");
+          if (own_x)
             tile_x = X.read(index_tile_x);
-          }
-          else {
-            trace("not-ownx");
-            tile_x = X_conj.read(LocalTileIndex{0, index_tile_at.col() - At_start.col()});
-          }
+          else
+            tile_x = X_conj.read(index_tile_x);
 
           auto gemm_b_func = unwrapping([=](auto&& tile_v, auto&& tile_x, auto&& tile_at) {
               trace("DOUBLE GEMM-2");
@@ -1002,9 +997,6 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
         V_futures.push_back(V.read(index_tile_v));
       }
     }
-
-    //if (rank_v0.col() != rank.col())
-    //  print(V, "V");
 
     // communicate V* col-wise
     MatrixType<Type> V_conj({Ai_size.cols() * nb, At_size.cols() * nb}, dist.blockSize());
