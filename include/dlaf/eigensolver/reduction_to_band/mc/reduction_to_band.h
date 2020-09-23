@@ -425,7 +425,7 @@ void update_a(const LocalTileIndex At_start, MatrixType<Type>& mat_a, ConstMatri
         {
           const SizeType index_tile_v{index_tile_at.row() - At_start.row()};
 
-          const LocalTileIndex index_tile_x{index_tile_at.col() - At_start.col(), 0};
+          const LocalTileIndex index_tile_x{0, index_tile_at.col() - At_start.col()};
 
           hpx::shared_future<ConstTileType<Type>> tile_x;
           const bool own_x =
