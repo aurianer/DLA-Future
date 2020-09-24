@@ -1033,7 +1033,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
           broadcast::send(comm_wrapper().colCommunicator(), tile_v);
         });
 
-        hpx::shared_future<ConstTileType<Type>> tile_v_fut = V_futures[0];
+        hpx::shared_future<ConstTileType<Type>> tile_v_fut = V_futures[index_v];
 
         hpx::dataflow(send_bcast_f, tile_v_fut, serial_comm());
 
@@ -1293,6 +1293,14 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
 
     // 3E UPDATE
     trace("At", At_start, "size:", At_size);
+
+    trace("Vrows");
+    for (const auto& tile_v_fut : V_futures)
+      print_tile(tile_v_fut.get());
+
+    trace("Vcols");
+    for (const auto& tile_vcols_fut : V_conj_futures)
+      print_tile(tile_vcols_fut.get());
 
     // HER2K At = At - X . V* + V . X*
     update_a(At_start, mat_a, X, Xcols, V_futures, V_conj_futures);
