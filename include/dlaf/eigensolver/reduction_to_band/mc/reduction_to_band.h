@@ -111,6 +111,8 @@ void compute_w(ConstMatrixType<Type>& T, common::internal::vector<FutureConstTil
   }
 }
 
+// TODO document that it stores in Xcols just the ones for which he is not on the right row,
+// otherwise it directly compute also gemm2 inside Xrows
 template <class Type>
 void compute_x(const LocalTileIndex At_start, ConstMatrixType<Type>& mat_a, ConstMatrixType<Type>& Wrows,
                ConstMatrixType<Type>& Wcols, MatrixType<Type>& Xrows, MatrixType<Type>& Xcols) {
@@ -1006,7 +1008,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
     if (rank_v0.col() == rank.col()) {
       // TODO Avoid useless communication
       auto send_bcast_f = unwrapping([](auto&& tile_v, auto&& comm_wrapper) {
-        std::cout << "Vsend" << std::endl;
+        trace("Vrows -> sending");
         print_tile(tile_v);
         broadcast::send(comm_wrapper().rowCommunicator(), tile_v);
       });
@@ -1025,8 +1027,8 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
     }
     else {
       auto recv_bcast_f = unwrapping([rank_v0](auto&& tile_v, auto&& comm_wrapper) {
+        trace("Vrows -> receiving");
         broadcast::receive_from(rank_v0.col(), comm_wrapper().rowCommunicator(), tile_v);
-        std::cout << "Vrecv" << std::endl;
         print_tile(tile_v);
       });
 
@@ -1037,33 +1039,39 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
       }
     }
 
-    // communicate V* col-wise
+    // communicate Vcols col-wise
     MatrixType<Type> V_conj({Ai_size.cols() * nb, At_size.cols() * nb}, dist.blockSize());
     common::internal::vector<FutureConstTile<Type>> V_conj_futures;
     V_conj_futures.reserve(At_size.cols());
 
-    for (SizeType index_v = 0; index_v < At_size.cols(); ++index_v) {
+    for (SizeType index_vcol = 0; index_vcol < At_size.cols(); ++index_vcol) {
       const auto index_v_global =
-          dist.template globalTileFromLocalTile<Coord::Col>(index_v + At_start.col());
+          dist.template globalTileFromLocalTile<Coord::Col>(index_vcol + At_start.col());
       const SizeType owner_rank_row = dist.template rankGlobalTile<Coord::Row>(index_v_global);
 
       if (owner_rank_row == rank.row()) {
-        auto send_bcast_f = unwrapping([](auto&& tile_v, auto&& comm_wrapper) {
+        const SizeType index_vcol_loc =
+            dist.template localTileFromGlobalTile<Coord::Row>(index_v_global) - At_start.row();
+        FutureConstTile<Type> tile_v_fut = V_futures[index_vcol_loc];
+
+        auto send_bcast_f = unwrapping([=](auto&& tile_v, auto&& comm_wrapper) {
+          trace("Vcols -> sending", index_vcol_loc, index_vcol, index_v_global);
+          print_tile(tile_v);
           broadcast::send(comm_wrapper().colCommunicator(), tile_v);
         });
-
-        FutureConstTile<Type> tile_v_fut = V_futures[index_v];
 
         hpx::dataflow(send_bcast_f, tile_v_fut, serial_comm());
 
         V_conj_futures.push_back(tile_v_fut);
       }
       else {
-        auto recv_bcast_f = unwrapping([root = owner_rank_row](auto&& tile_v, auto&& comm_wrapper) {
-          broadcast::receive_from(root, comm_wrapper().colCommunicator(), tile_v);
-        });
+        LocalTileIndex index_tile_v{0, index_vcol};
 
-        LocalTileIndex index_tile_v{0, index_v};
+        auto recv_bcast_f = unwrapping([=](auto&& tile_v, auto&& comm_wrapper) {
+          trace("Vcols -> receiving", index_vcol, index_v_global);
+          broadcast::receive_from(owner_rank_row, comm_wrapper().colCommunicator(), tile_v);
+          print_tile(tile_v);
+        });
 
         hpx::dataflow(recv_bcast_f, V_conj(index_tile_v), serial_comm());
 
@@ -1075,7 +1083,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
       print(V_conj, "Vconj");
 
     // 3 UPDATE TRAILING MATRIX
-    trace(">>> UPDATE TRAILING MATRIX");
+    trace(">>> UPDATE TRAILING MATRIX", j_panel);
     trace(">>> At", At_size, At_start);
 
     // 3A COMPUTE W
