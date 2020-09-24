@@ -168,8 +168,8 @@ void compute_x(const LocalTileIndex At_start, ConstMatrixType<Type>& mat_a, Cons
         // A  . W
         {
           const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
-
           FutureTile<Type> tile_x = Xrows(index_tile_x);
+
           FutureConstTile<Type> tile_a = mat_a.read(index_tile_at);
 
           FutureConstTile<Type> tile_w;
@@ -200,14 +200,14 @@ void compute_x(const LocalTileIndex At_start, ConstMatrixType<Type>& mat_a, Cons
             print_tile(tile_x);
 
             // clang-format off
-              blas::gemm(blas::Layout::ColMajor,
-                  blas::Op::NoTrans, blas::Op::NoTrans,
-                  tile_a.size().rows(), tile_w.size().cols(), tile_a.size().cols(),
-                  Type(1),
-                  tile_a.ptr(), tile_a.ld(),
-                  tile_w.ptr(), tile_w.ld(),
-                  Type(1),
-                  tile_x.ptr(), tile_x.ld());
+            blas::gemm(blas::Layout::ColMajor,
+                blas::Op::NoTrans, blas::Op::NoTrans,
+                tile_a.size().rows(), tile_w.size().cols(), tile_a.size().cols(),
+                Type(1),
+                tile_a.ptr(), tile_a.ld(),
+                tile_w.ptr(), tile_w.ld(),
+                Type(1),
+                tile_x.ptr(), tile_x.ld());
             // clang-format on
 
             trace("*tile_x");
@@ -228,7 +228,7 @@ void compute_x(const LocalTileIndex At_start, ConstMatrixType<Type>& mat_a, Cons
           FutureTile<Type> tile_x;
           // if it will be reduced on itself, just add it now
           const bool own_x =
-              dist.template rankGlobalTile<Coord::Row>(index_tile_at_g.col()) == rank.row();
+              rank.row() == dist.template rankGlobalTile<Coord::Row>(index_tile_at_g.col());
           if (own_x)
             tile_x = Xrows(
                 LocalTileIndex{dist.template localTileFromGlobalTile<Coord::Row>(index_tile_at_g.col()) -
