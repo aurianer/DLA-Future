@@ -319,10 +319,10 @@ void update_x(MatrixType<Type>& X, ConstMatrixType<Type>& W2,
 }
 
 template <class Type>
-void update_a(const LocalTileIndex At_start, MatrixType<Type>& mat_a, ConstMatrixType<Type>& X,
-              ConstMatrixType<Type>& X_conj,
-              common::internal::vector<hpx::shared_future<ConstTileType<Type>>> V_futures,
-              common::internal::vector<hpx::shared_future<ConstTileType<Type>>> V_conj_futures) {
+void update_a(const LocalTileIndex At_start, MatrixType<Type>& mat_a, ConstMatrixType<Type>& Xrows,
+              ConstMatrixType<Type>& Xcols,
+              common::internal::vector<hpx::shared_future<ConstTileType<Type>>> Vrows_futs,
+              common::internal::vector<hpx::shared_future<ConstTileType<Type>>> Vcols_futs) {
   using hpx::util::unwrapping;
 
   const auto dist = mat_a.distribution();
@@ -340,8 +340,10 @@ void update_a(const LocalTileIndex At_start, MatrixType<Type>& mat_a, ConstMatri
       if (is_diagonal_tile) {
         // HER2K
         const SizeType index_tile_v{index_tile_at.row() - At_start.row()};
+        hpx::shared_future<ConstTileType<Type>> tile_v = Vrows_futs[index_tile_v];
 
         const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
+        hpx::shared_future<ConstTileType<Type>> tile_x = Xrows.read(index_tile_x);
 
         auto her2k_func = unwrapping([](auto&& tile_v, auto&& tile_x, auto&& tile_at) {
           trace("HER2K");
@@ -370,28 +372,28 @@ void update_a(const LocalTileIndex At_start, MatrixType<Type>& mat_a, ConstMatri
           print_tile(tile_at);
         });
 
-        auto tile_x_fut = X.read(index_tile_x);
-        hpx::dataflow(her2k_func, V_futures[index_tile_v], tile_x_fut, mat_a(index_tile_at));
+        hpx::dataflow(her2k_func, tile_v, tile_x, mat_a(index_tile_at));
       }
       else {
         // GEMM A: X . V*
         {
           const LocalTileIndex index_tile_x{index_tile_at.row() - At_start.row(), 0};
-
-          const SizeType index_tile_v{index_tile_at.col() - At_start.col()};
+          hpx::shared_future<ConstTileType<Type>> tile_x = Xrows.read(index_tile_x);
 
           hpx::shared_future<ConstTileType<Type>> tile_v;
           const bool own_v =
               rank.row() == dist.template rankGlobalTile<Coord::Row>(index_tile_at_g.col());
           if (own_v) {
-            const auto index_v_loc = dist.template localTileFromGlobalTile<Coord::Row>(index_tile_at_g.col()) - At_start.row();
-            tile_v = V_futures[index_v_loc];
+            const auto index_v_loc =
+                dist.template localTileFromGlobalTile<Coord::Row>(index_tile_at_g.col()) -
+                At_start.row();
+            tile_v = Vrows_futs[index_v_loc];
           }
           else
-            tile_v = V_conj_futures[index_tile_v];
+            tile_v = Vcols_futs[index_tile_at.col() - At_start.col()];
 
-          auto gemm_a_func = unwrapping([=](auto&& tile_x, auto&& tile_v, auto&& tile_at) {
-            trace("DOUBLE GEMM-1", own_v, index_tile_v);
+          auto gemm_a_func = unwrapping([](auto&& tile_x, auto&& tile_v, auto&& tile_at) {
+            trace("DOUBLE GEMM-1");
 
             std::cout << "tile_x\n";
             print_tile(tile_x);
@@ -417,28 +419,28 @@ void update_a(const LocalTileIndex At_start, MatrixType<Type>& mat_a, ConstMatri
             print_tile(tile_at);
           });
 
-          auto tile_x_fut = X.read(index_tile_x);
-          hpx::dataflow(gemm_a_func, tile_x_fut, tile_v, mat_a(index_tile_at));
+          hpx::dataflow(gemm_a_func, tile_x, tile_v, mat_a(index_tile_at));
         }
 
         // GEMM A: V . X*
         {
           const SizeType index_tile_v{index_tile_at.row() - At_start.row()};
-
-          const LocalTileIndex index_tile_x{0, index_tile_at.col() - At_start.col()};
+          hpx::shared_future<ConstTileType<Type>> tile_v = Vrows_futs[index_tile_v];
 
           hpx::shared_future<ConstTileType<Type>> tile_x;
           const bool own_x =
               rank.row() == dist.template rankGlobalTile<Coord::Row>(index_tile_at_g.col());
           if (own_x) {
-            const auto index_x_loc = dist.template localTileFromGlobalTile<Coord::Row>(index_tile_at_g.col()) - At_start.row();
-            tile_x = X.read(LocalTileIndex{index_x_loc, 0});
+            const auto index_x_loc =
+                dist.template localTileFromGlobalTile<Coord::Row>(index_tile_at_g.col()) -
+                At_start.row();
+            tile_x = Xrows.read(LocalTileIndex{index_x_loc, 0});
           }
           else
-            tile_x = X_conj.read(index_tile_x);
+            tile_x = Xcols.read(LocalTileIndex{0, index_tile_at.col() - At_start.col()});
 
-          auto gemm_b_func = unwrapping([=](auto&& tile_v, auto&& tile_x, auto&& tile_at) {
-            trace("DOUBLE GEMM-2", own_x, index_tile_x);
+          auto gemm_b_func = unwrapping([](auto&& tile_v, auto&& tile_x, auto&& tile_at) {
+            trace("DOUBLE GEMM-2");
 
             std::cout << "tile_v\n";
             print_tile(tile_v);
@@ -464,7 +466,7 @@ void update_a(const LocalTileIndex At_start, MatrixType<Type>& mat_a, ConstMatri
             print_tile(tile_at);
           });
 
-          hpx::dataflow(gemm_b_func, V_futures[index_tile_v], tile_x, mat_a(index_tile_at));
+          hpx::dataflow(gemm_b_func, tile_v, tile_x, mat_a(index_tile_at));
         }
       }
     }
@@ -1033,7 +1035,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
           broadcast::send(comm_wrapper().colCommunicator(), tile_v);
         });
 
-        hpx::shared_future<ConstTileType<Type>> tile_v_fut = V_futures[0];
+        hpx::shared_future<ConstTileType<Type>> tile_v_fut = V_futures[index_v];
 
         hpx::dataflow(send_bcast_f, tile_v_fut, serial_comm());
 
@@ -1293,6 +1295,14 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
 
     // 3E UPDATE
     trace("At", At_start, "size:", At_size);
+
+    trace("Vrows");
+    for (const auto& tile_v_fut : V_futures)
+      print_tile(tile_v_fut.get());
+
+    trace("Vcols");
+    for (const auto& tile_vcols_fut : V_conj_futures)
+      print_tile(tile_vcols_fut.get());
 
     // HER2K At = At - X . V* + V . X*
     update_a(At_start, mat_a, X, Xcols, V_futures, V_conj_futures);
