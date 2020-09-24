@@ -1167,18 +1167,23 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
      * The result for X has to be reduced using both Xrows and Xcols.
      */
 
-    trace("REDUCING X", "At size", At_size, "At_start", At_start, "X", X.nrTiles());
-
     // reducing X col-wise
-    for (SizeType index_xconj_col = 0; index_xconj_col < At_size.cols(); ++index_xconj_col) {
-      const auto index_tile_k =
-          dist.template globalTileFromLocalTile<Coord::Col>(index_xconj_col + At_start.col());
+    for (SizeType index_xcol = 0; index_xcol < At_size.cols(); ++index_xcol) {
+      const SizeType index_tile_k =
+          dist.template globalTileFromLocalTile<Coord::Col>(index_xcol + At_start.col());
 
-      const auto rank_owner_row = dist.template rankGlobalTile<Coord::Row>(index_tile_k);
+      const IndexT_MPI rank_owner_row = dist.template rankGlobalTile<Coord::Row>(index_tile_k);
 
       if (rank_owner_row == rank.row()) {
+        const auto index_x_row =
+            dist.template localTileFromGlobalTile<Coord::Row>(index_tile_k) - At_start.row();
+
+        FutureTile<Type> tile_x = X(LocalTileIndex{index_x_row, 0});
         auto reduce_x_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
           auto comm_grid = comm_wrapper();
+
+          trace("reducing root X col-wise", rank_owner_row, index_tile_k);
+          print_tile(tile_x);
 
           reduce(rank_owner_row, comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x),
                  make_data(tile_x));
@@ -1187,61 +1192,39 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
           print_tile(tile_x);
         });
 
-        const auto index_x_row =
-            dist.template localTileFromGlobalTile<Coord::Row>(index_tile_k) - At_start.row();
-        hpx::dataflow(reduce_x_func, X(LocalTileIndex{index_x_row, 0}), serial_comm());  // TODO RW
+        hpx::dataflow(reduce_x_func, std::move(tile_x), serial_comm());
       }
       else {
+        FutureConstTile<Type> tile_x = Xcols.read(LocalTileIndex{0, index_xcol});
+
         auto reduce_x_func = unwrapping([=](auto&& tile_x_conj, auto&& comm_wrapper) {
           auto comm_grid = comm_wrapper();
+
+          trace("reducing send X col-wise", rank_owner_row, index_tile_k, "x", index_xcol);
+          print_tile(tile_x_conj);
 
           Type fake;
           reduce(rank_owner_row, comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x_conj),
                  make_data(&fake, 0));
         });
 
-        hpx::dataflow(reduce_x_func, Xcols(LocalTileIndex{0, index_xconj_col}),
-                      serial_comm());  // TODO RW
+        hpx::dataflow(reduce_x_func, std::move(tile_x), serial_comm());
       }
     }
 
+    print(X, "Xint");
+
     for (SizeType index_x = 0; index_x < At_size.rows(); ++index_x) {
-      const auto index_tile_k =
-          dist.template globalTileFromLocalTile<Coord::Row>(index_x + At_start.row());
+      /*
+       * TODO on rank not in V column, the first data is not referenced/used
+       * for the reducers, it happens in-place
+       */
+      auto reduce_x_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
+        reduce(rank_v0.col(), comm_wrapper().rowCommunicator(), MPI_SUM, make_data(tile_x),
+            make_data(tile_x));
+      });
 
-      const auto rank_owner_col = dist.template rankGlobalTile<Coord::Col>(index_tile_k);
-
-      if (rank_owner_col == rank.col()) {
-        auto reduce_x_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
-          auto comm_grid = comm_wrapper();
-
-          trace("reducing root X row-wise", rank_owner_col, index_tile_k);
-          print_tile(tile_x);
-
-          reduce(rank_v0.col(), comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x),
-                 make_data(tile_x));
-
-          trace("REDUCED ROW", index_tile_k);
-          print_tile(tile_x);
-        });
-
-        const auto index_x_row =
-            dist.template localTileFromGlobalTile<Coord::Col>(index_tile_k) - At_start.col();
-        hpx::dataflow(reduce_x_func, X(LocalTileIndex{index_x, 0}), serial_comm());  // TODO RW
-      }
-      else {
-        auto reduce_x_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
-          auto comm_grid = comm_wrapper();
-
-          trace("reducing send X row-wise", rank_owner_col, index_tile_k, "x", index_x);
-          print_tile(tile_x);
-
-          reduce(rank_v0.col(), comm_grid.rowCommunicator(), MPI_SUM, make_data(tile_x),
-                 make_data(tile_x));
-        });
-
-        hpx::dataflow(reduce_x_func, X(LocalTileIndex{index_x, 0}), serial_comm());  // TODO RW
-      }
+      hpx::dataflow(reduce_x_func, X(LocalTileIndex{index_x, 0}), serial_comm());
     }
 
     // 3C COMPUTE W2
