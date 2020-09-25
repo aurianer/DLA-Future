@@ -1232,45 +1232,49 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
      */
 
     // reducing X col-wise
-    for (SizeType index_xcol = 0; index_xcol < At_size.cols(); ++index_xcol) {
-      const SizeType index_tile_k =
-          dist.template globalTileFromLocalTile<Coord::Col>(index_xcol + At_start.col());
+    /*
+     * TODO possible FIXME cannot use iterate_range2d over x_tmp distribution because otherwise it would enter for non used columns and it will fail
+     */
+    for (SizeType i_component = 0; i_component < At_size.cols(); ++i_component) {
+      const SizeType index_x_row =
+          dist.template globalTileFromLocalTile<Coord::Col>(i_component + At_start.col());
 
-      const IndexT_MPI rank_owner_row = dist.template rankGlobalTile<Coord::Row>(index_tile_k);
+      const IndexT_MPI rank_owner_row = dist.template rankGlobalTile<Coord::Row>(index_x_row);
 
       if (rank_owner_row == rank.row()) {
-        const auto index_x_row =
-            dist.template localTileFromGlobalTile<Coord::Row>(index_tile_k) - At_start.row();
-
-        FutureTile<Type> tile_x = x(LocalTileIndex{index_x_row, 0});
         auto reduce_x_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
           auto comm_grid = comm_wrapper();
 
-          trace("reducing root X col-wise", rank_owner_row, index_tile_k);
+          trace("reducing root X col-wise", rank_owner_row, index_x_row);
           print_tile(tile_x);
 
           reduce(rank_owner_row, comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x),
-                 make_data(tile_x));
+              make_data(tile_x));
 
-          trace("REDUCED COL", index_tile_k);
+          trace("REDUCED COL", index_x_row);
           print_tile(tile_x);
         });
+
+        const SizeType index_x_row_loc =
+          dist.template localTileFromGlobalTile<Coord::Row>(index_x_row) - At_start.row();
+
+        FutureTile<Type> tile_x = x(LocalTileIndex{index_x_row_loc, 0});
 
         hpx::dataflow(reduce_x_func, std::move(tile_x), serial_comm());
       }
       else {
-        FutureConstTile<Type> tile_x = x_tmp.read(LocalTileIndex{0, index_xcol});
-
         auto reduce_x_func = unwrapping([=](auto&& tile_x_conj, auto&& comm_wrapper) {
           auto comm_grid = comm_wrapper();
 
-          trace("reducing send X col-wise", rank_owner_row, index_tile_k, "x", index_xcol);
+          trace("reducing send X col-wise", rank_owner_row, index_x_row, "x", i_component);
           print_tile(tile_x_conj);
 
           Type fake;
           reduce(rank_owner_row, comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x_conj),
                  make_data(&fake, 0));
         });
+
+        FutureConstTile<Type> tile_x = x_tmp.read(LocalTileIndex{0, i_component});
 
         hpx::dataflow(reduce_x_func, std::move(tile_x), serial_comm());
       }
@@ -1282,6 +1286,9 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
      * TODO on rank not in V column, the first data is not referenced/used
      * for the reducers, it happens in-place
      * it can be splitted for read only management of the tiles on senders' side
+     */
+    /*
+     * TODO Check if for the same reason as before, iterate_range2d cannot be used over x distribution
      */
     for (SizeType index_x = 0; index_x < At_size.rows(); ++index_x) {
       auto reduce_x_func = unwrapping([rank_v0](auto&& tile_x, auto&& comm_wrapper) {
@@ -1331,27 +1338,27 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
         broadcast::receive_from(rank_v0.col(), comm_wrapper().rowCommunicator(), make_data(tile_x));
     });
 
-    for (const auto& index_tile_x : iterate_range2d(x.distribution().localNrTiles()))
-      hpx::dataflow(bcast_x_rowwise_func, x(index_tile_x), serial_comm());
+    for (const LocalTileIndex& index_x_loc : iterate_range2d(x.distribution().localNrTiles()))
+      hpx::dataflow(bcast_x_rowwise_func, x(index_x_loc), serial_comm());
 
     // broadcast X colwise
-    for (SizeType index_xconj_col = 0; index_xconj_col < At_size.cols(); ++index_xconj_col) {
-      const auto index_tile_k =
-          dist.template globalTileFromLocalTile<Coord::Col>(index_xconj_col + At_start.col());
+    for (SizeType index_x_loc = 0; index_x_loc < At_size.cols(); ++index_x_loc) {
+      const auto index_x_row =
+          dist.template globalTileFromLocalTile<Coord::Col>(index_x_loc + At_start.col());
 
-      const SizeType rank_owner = dist.template rankGlobalTile<Coord::Row>(index_tile_k);
+      const SizeType rank_owner = dist.template rankGlobalTile<Coord::Row>(index_x_row);
 
       if (rank_owner == rank.row()) {
-        const SizeType index_x_row =
-            dist.template localTileFromGlobalTile<Coord::Row>(index_tile_k) - At_start.row();
-
         auto bcast_xupd_colwise_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
           trace("sending tile_x");
           print_tile(tile_x);
           broadcast::send(comm_wrapper().colCommunicator(), make_data(tile_x));
         });
 
-        hpx::dataflow(bcast_xupd_colwise_func, x(LocalTileIndex{index_x_row, 0}), serial_comm());
+        const SizeType index_x_row_loc =
+            dist.template localTileFromGlobalTile<Coord::Row>(index_x_row) - At_start.row();
+
+        hpx::dataflow(bcast_xupd_colwise_func, x(LocalTileIndex{index_x_row_loc, 0}), serial_comm());
       }
       else {
         auto bcast_xupd_colwise_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
@@ -1360,7 +1367,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
           print_tile(tile_x);
         });
 
-        hpx::dataflow(bcast_xupd_colwise_func, x_tmp(LocalTileIndex{0, index_xconj_col}), serial_comm());
+        hpx::dataflow(bcast_xupd_colwise_func, x_tmp(LocalTileIndex{0, index_x_loc}), serial_comm());
       }
     }
 
