@@ -13,7 +13,7 @@
 #include <string>
 
 #include <hpx/include/util.hpp>
-//#include <hpx/local/future.hpp>
+#include <hpx/local/future.hpp>
 
 #include "dlaf/common/data.h"
 #include "dlaf/common/pipeline.h"
