@@ -1007,9 +1007,9 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
     };
     const LocalTileSize At_size{Ai_size.rows(), dist.localNrTiles().cols() - At_start.col()};
 
-    // workspaces used as support for computations with trailing matrix At
-    const LocalElementSize workspace_col_localsize{Ai_size.rows() * nb, Ai_size.cols() * nb};
-    const LocalElementSize workspace_row_localsize{Ai_size.cols() * nb, At_size.cols() * nb};
+    // distribution for local workspaces (useful for computations with trailing matrix At)
+    const matrix::Distribution dist_col({Ai_size.rows() * nb, Ai_size.cols() * nb}, dist.blockSize());
+    const matrix::Distribution dist_row({Ai_size.cols() * nb, At_size.cols() * nb}, dist.blockSize());
 
     print(mat_a, std::string("A_input") + std::to_string(j_panel));
 
@@ -1107,7 +1107,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
      */
 
     // communicate V row-wise
-    MatrixT<Type> mat_v(workspace_col_localsize, dist.blockSize());
+    MatrixT<Type> mat_v(dist_col);
     FutureConstPanel<Type> v(Ai_size.rows());
 
     if (is_reflector_rank_col) {
@@ -1153,7 +1153,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
     DLAF_ASSERT_HEAVY(Ai_size.rows() == v.size(), Ai_size.rows(), v.size());
 
     // communicate Vcols col-wise
-    MatrixT<Type> mat_v_tmp(workspace_row_localsize, dist.blockSize());
+    MatrixT<Type> mat_v_tmp(dist_row);
     FutureConstPanel<Type> v_tmp(At_size.cols());
 
     for (SizeType index_v_loc = 0; index_v_loc < At_size.cols(); ++index_v_loc) {
@@ -1200,7 +1200,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
     trace(">>> At", At_size, At_start);
 
     // 3A COMPUTE W
-    MatrixT<Type> w(workspace_col_localsize, dist.blockSize());
+    MatrixT<Type> w(dist_col);
 
     // TRMM W = V . T
     if (is_reflector_rank_col)
@@ -1226,7 +1226,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
     }
 
     // W* bcast col-wise
-    MatrixT<Type> w_tmp(workspace_row_localsize, dist.blockSize());
+    MatrixT<Type> w_tmp(dist_row);
     set_to_zero(w_tmp);  // TODO superflous? if it is not used here, it will not be used later?
 
     for (const LocalTileIndex index_x_loc : iterate_range2d(w_tmp.distribution().localNrTiles())) {
