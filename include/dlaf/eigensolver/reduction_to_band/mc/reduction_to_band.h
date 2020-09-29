@@ -89,7 +89,7 @@ void set_to_zero(MatrixT<Type>& matrix) {
 }
 
 template <class T>
-hpx::shared_future<ReflectorParams<T>> compute_reflector(
+hpx::shared_future<T> compute_reflector(
     MatrixT<T>& a, const LocalTileIndex ai_start_loc, const LocalTileSize ai_localsize,
     const GlobalTileIndex ai_start, const TileElementIndex index_el_x0,
     common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
@@ -166,10 +166,12 @@ hpx::shared_future<ReflectorParams<T>> compute_reflector(
    * but it would benefit if all_reduce of the norm and x0 is faster than communicating params
    */
   // 1A/2 COMPUTE PARAMS
+  hpx::shared_future<T> tau;
   hpx::shared_future<ReflectorParams<T>> reflector_params;
   if (rank_v0 == rank) {
     auto compute_parameters_func =
-        unwrapping([](const x0_and_squares_t& x0_and_norm, ReflectorParams<T>&& params) {
+        unwrapping([](const x0_and_squares_t& x0_and_norm) {
+          ReflectorParams<T> params;
           params.x0 = x0_and_norm.first;
 
           // compute the norm
@@ -180,6 +182,7 @@ hpx::shared_future<ReflectorParams<T>> compute_reflector(
 
           // compute tau
           params.tau = (params.y - params.x0) / params.y;
+          const T tau = params.tau;
 
           // compute k factor
           params.factor = 1 / (params.x0 - params.y);
@@ -190,15 +193,15 @@ hpx::shared_future<ReflectorParams<T>> compute_reflector(
           trace("y   = ", params.y);
           trace("tau = ", params.tau);
 
-          return std::move(params);
+          return hpx::make_tuple(params, tau);
         });
 
-    reflector_params = hpx::dataflow(compute_parameters_func, x0_and_squares, hpx::make_ready_future<ReflectorParams<T>>());
+    hpx::tie(reflector_params, tau) = hpx::split_future(hpx::dataflow(compute_parameters_func, x0_and_squares));
 
     auto bcast_params_func = unwrapping([](const auto& params, auto&& comm_wrapper) {
-      const T data[2] = {params.y, params.factor};
-      broadcast::send(comm_wrapper().colCommunicator(), make_data(data, 2));
-      trace("sending params", data[0], data[1]);
+      const T data[3] = {params.y, params.factor, params.tau};
+      broadcast::send(comm_wrapper().colCommunicator(), make_data(data, 3));
+      trace("sending params", data[0], data[1], data[2]);
     });
 
     hpx::dataflow(bcast_params_func, reflector_params, serial_comm());
@@ -206,16 +209,17 @@ hpx::shared_future<ReflectorParams<T>> compute_reflector(
   else {
     auto bcast_params_func = unwrapping([rank = rank_v0.row()](auto&& comm_wrapper) {
       trace("waiting params");
-      T data[2];
-      broadcast::receive_from(rank, comm_wrapper().colCommunicator(), make_data(data, 2));
+      T data[3];
+      broadcast::receive_from(rank, comm_wrapper().colCommunicator(), make_data(data, 3));
       ReflectorParams<T> params;
       params.y = data[0];
       params.factor = data[1];
-      trace("received params", data[0], data[1]);
-      return params;
+      params.tau = data[2];
+      trace("received params", data[0], data[1], data[2]);
+      return hpx::make_tuple(params, params.tau);
     });
 
-    reflector_params = hpx::dataflow(bcast_params_func, serial_comm());
+    hpx::tie(reflector_params, tau) = hpx::split_future(hpx::dataflow(bcast_params_func, serial_comm()));
   }
 
   // 1A/3 COMPUTE REFLECTOR COMPONENTs
@@ -243,14 +247,14 @@ hpx::shared_future<ReflectorParams<T>> compute_reflector(
     hpx::dataflow(compute_reflector_func, a(index_v_loc), reflector_params);
   }
 
-  return reflector_params;
+  return tau;
 }
 
 template <class T>
 void update_trailing_panel(MatrixT<T>& a, const LocalTileIndex ai_start_loc,
                            const LocalTileSize ai_localsize, const GlobalTileIndex ai_start,
                            const TileElementIndex index_el_x0,
-                           hpx::shared_future<ReflectorParams<T>> reflector_params,
+                           hpx::shared_future<T> tau,
                            common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
   using hpx::util::unwrapping;
   using common::make_data;
@@ -350,7 +354,7 @@ void update_trailing_panel(MatrixT<T>& a, const LocalTileIndex ai_start_loc,
 
       // GER Pt = Pt - tau . v . w*
       auto apply_reflector_func =
-          unwrapping([=](auto&& tile_a, const ReflectorParams<T>& params, const auto& tile_w) {
+          unwrapping([=](auto&& tile_a, const T tau, const auto& tile_w) {
             const SizeType first_element = has_first_component ? index_el_x0.row() : 0;
 
             // clang-format off
@@ -360,8 +364,6 @@ void update_trailing_panel(MatrixT<T>& a, const LocalTileIndex ai_start_loc,
             TileElementIndex        v_start {first_element, index_el_x0.col()};
             const TileElementIndex  w_start {0, index_el_x0.col() + 1};
             // clang-format on
-
-            const T tau = -1 / (params.factor * params.y);  // TODO FIXME
 
             trace("UPDATE TRAILING PANEL, tau =", tau);
             trace("A");
@@ -402,7 +404,7 @@ void update_trailing_panel(MatrixT<T>& a, const LocalTileIndex ai_start_loc,
             print_tile(tile_a);
           });
 
-      hpx::dataflow(apply_reflector_func, a(index_a_loc), reflector_params, w(LocalTileIndex{0, 0}));
+      hpx::dataflow(apply_reflector_func, a(index_a_loc), tau, w(LocalTileIndex{0, 0}));
     }
   }
 }
@@ -411,7 +413,7 @@ template <class Type>
 void compute_t_factor(MatrixT<Type>& t, ConstMatrixT<Type>& a, const LocalTileIndex ai_start_loc,
                       const LocalTileSize ai_localsize, const GlobalTileIndex ai_start,
                       const TileElementIndex index_el_x0,
-                      hpx::shared_future<ReflectorParams<Type>> reflector_params,
+                      hpx::shared_future<Type> tau,
                       common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
   using hpx::util::unwrapping;
   using common::make_data;
@@ -437,9 +439,7 @@ void compute_t_factor(MatrixT<Type>& t, ConstMatrixT<Type>& a, const LocalTileIn
 
     // GEMV t = V(j:mV; 0:j)* . V(j:mV;j)
     auto gemv_func =
-        unwrapping([=](auto&& tile_t, const ReflectorParams<Type>& params, const auto& tile_v) {
-          const Type tau = params.tau;
-
+        unwrapping([=](auto&& tile_t, const Type tau, const auto& tile_v) {
           const SizeType first_element_in_tile = has_first_component ? index_el_x0.row() + 1 : 0;
 
           // T(0:j, j) = -tau . V(j:, 0:j)* . V(j:, j)
@@ -485,7 +485,7 @@ void compute_t_factor(MatrixT<Type>& t, ConstMatrixT<Type>& a, const LocalTileIn
           }
         });
 
-    hpx::dataflow(gemv_func, t(LocalTileIndex{0, 0}), reflector_params, a.read(index_tile_v));
+    hpx::dataflow(gemv_func, t(LocalTileIndex{0, 0}), tau, a.read(index_tile_v));
   }
 
   // REDUCE after GEMV
@@ -1037,17 +1037,13 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
 
         trace(">>> COMPUTING local reflector", index_el_x0);
 
-        hpx::shared_future<ReflectorParams<Type>> reflector_params;
-        reflector_params =
-            compute_reflector(mat_a, Ai_start, Ai_size, Ai_start_global, index_el_x0, serial_comm);
+        auto tau = compute_reflector(mat_a, Ai_start, Ai_size, Ai_start_global, index_el_x0, serial_comm);
 
-        update_trailing_panel(mat_a, Ai_start, Ai_size, Ai_start_global, index_el_x0, reflector_params,
-                              serial_comm);
+        update_trailing_panel(mat_a, Ai_start, Ai_size, Ai_start_global, index_el_x0, tau, serial_comm);
 
         print(mat_a, std::string("A") + std::to_string(j_panel));
 
-        compute_t_factor(t, mat_a, Ai_start, Ai_size, Ai_start_global, index_el_x0, reflector_params,
-                         serial_comm);
+        compute_t_factor(t, mat_a, Ai_start, Ai_size, Ai_start_global, index_el_x0, tau, serial_comm);
       }
 
       // setup V0
