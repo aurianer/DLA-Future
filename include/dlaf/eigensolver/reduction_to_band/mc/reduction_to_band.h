@@ -408,8 +408,8 @@ void update_trailing_panel(MatrixT<T>& a, const LocalTileIndex ai_start_loc,
 }
 
 template <class Type>
-void compute_t_factor(MatrixT<Type>& t, ConstMatrixT<Type>& mat_a, const LocalTileIndex Ai_start,
-                      const LocalTileSize Ai_size, const GlobalTileIndex Ai_start_global,
+void compute_t_factor(MatrixT<Type>& t, ConstMatrixT<Type>& a, const LocalTileIndex ai_start_loc,
+                      const LocalTileSize ai_localsize, const GlobalTileIndex ai_start,
                       const TileElementIndex index_el_x0,
                       hpx::shared_future<ReflectorParams<Type>> reflector_params,
                       common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
@@ -417,23 +417,23 @@ void compute_t_factor(MatrixT<Type>& t, ConstMatrixT<Type>& mat_a, const LocalTi
   using common::make_data;
   using namespace comm::sync;
 
-  const auto& dist = mat_a.distribution();
+  const auto& dist = a.distribution();
   const comm::Index2D rank = dist.rankIndex();
-  const comm::Index2D rank_v0 = dist.rankGlobalTile(Ai_start_global);
+  const comm::Index2D rank_v0 = dist.rankGlobalTile(ai_start);
 
   // 2. CALCULATE T-FACTOR
   // T(0:j, j) = T(0:j, 0:j) . -tau(j) . V(j:, 0:j)* . V(j:, j)
 
   // 2A First step GEMV
-  const TileElementSize T_size{index_el_x0.row(), 1};
-  const TileElementIndex T_start{0, index_el_x0.col()};
-  for (const auto& index_tile_v : iterate_range2d(Ai_start, Ai_size)) {
+  const TileElementSize t_size{index_el_x0.row(), 1};
+  const TileElementIndex t_start{0, index_el_x0.col()};
+  for (const auto& index_tile_v : iterate_range2d(ai_start_loc, ai_localsize)) {
     trace("* COMPUTING T", index_tile_v);
 
     const SizeType index_tile_v_global =
         dist.template globalTileFromLocalTile<Coord::Row>(index_tile_v.row());
 
-    const bool has_first_component = (index_tile_v_global == Ai_start_global.row());
+    const bool has_first_component = (index_tile_v_global == ai_start.row());
 
     // GEMV t = V(j:mV; 0:j)* . V(j:mV;j)
     auto gemv_func =
@@ -454,7 +454,7 @@ void compute_t_factor(MatrixT<Type>& t, ConstMatrixT<Type>& mat_a, const LocalTi
             tile_t(index_el_x0) = tau;
 
             // compute first component with implicit one
-            for (const auto& index_el_t : iterate_range2d(T_start, T_size)) {
+            for (const auto& index_el_t : iterate_range2d(t_start, t_size)) {
               const auto index_el_va = common::internal::transposed(index_el_t);
               tile_t(index_el_t) = -tau * tile_v(index_el_va);
 
@@ -471,13 +471,13 @@ void compute_t_factor(MatrixT<Type>& t, ConstMatrixT<Type>& mat_a, const LocalTi
             const Type alpha = -tau;
             const Type beta = 1;
             // clang-format off
-          blas::gemv(blas::Layout::ColMajor,
-              blas::Op::ConjTrans,
-              V_size.rows(), V_size.cols(),
-              alpha,
-              tile_v.ptr(Va_start), tile_v.ld(),
-              tile_v.ptr(Vb_start), 1,
-              beta, tile_t.ptr(T_start), 1);
+            blas::gemv(blas::Layout::ColMajor,
+                blas::Op::ConjTrans,
+                V_size.rows(), V_size.cols(),
+                alpha,
+                tile_v.ptr(Va_start), tile_v.ld(),
+                tile_v.ptr(Vb_start), 1,
+                beta, tile_t.ptr(t_start), 1);
             // clang-format on
 
             for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
@@ -485,19 +485,19 @@ void compute_t_factor(MatrixT<Type>& t, ConstMatrixT<Type>& mat_a, const LocalTi
           }
         });
 
-    hpx::dataflow(gemv_func, t(LocalTileIndex{0, 0}), reflector_params, mat_a.read(index_tile_v));
+    hpx::dataflow(gemv_func, t(LocalTileIndex{0, 0}), reflector_params, a.read(index_tile_v));
   }
 
   // REDUCE after GEMV
-  if (!T_size.isEmpty()) {
+  if (!t_size.isEmpty()) {
     auto reduce_t_func = unwrapping([=](auto&& tile_t, auto&& comm_wrapper) {
-      auto&& input_t = make_data(tile_t.ptr(T_start), T_size.rows());
-      std::vector<Type> out_data(T_size.rows());
-      auto&& output_t = make_data(out_data.data(), T_size.rows());
+      auto&& input_t = make_data(tile_t.ptr(t_start), t_size.rows());
+      std::vector<Type> out_data(t_size.rows());
+      auto&& output_t = make_data(out_data.data(), t_size.rows());
       // TODO reduce just the current, otherwise reduce all together
       reduce(rank_v0.row(), comm_wrapper().colCommunicator(), MPI_SUM, input_t, output_t);
       common::copy(output_t, input_t);
-      trace("reducing", T_start, T_size.rows(), *tile_t.ptr());
+      trace("reducing", t_start, t_size.rows(), *tile_t.ptr());
     });
 
     // TODO just reducer needs RW
@@ -513,9 +513,9 @@ void compute_t_factor(MatrixT<Type>& t, ConstMatrixT<Type>& mat_a, const LocalTi
       // clang-format off
       blas::trmv(blas::Layout::ColMajor,
           blas::Uplo::Upper, blas::Op::NoTrans, blas::Diag::NonUnit,
-          T_size.rows(),
+          t_size.rows(),
           tile_t.ptr(), tile_t.ld(),
-          tile_t.ptr(T_start), 1);
+          tile_t.ptr(t_start), 1);
       // clang-format on
     });
 
@@ -974,6 +974,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
   using common::iterate_range2d;
   using common::make_data;
   using hpx::util::unwrapping;
+  using matrix::Distribution;
 
   using namespace comm;
   using namespace comm::sync;
@@ -983,12 +984,14 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
 
   const SizeType nb = mat_a.blockSize().rows();
 
+  const Distribution dist_block(LocalElementSize{nb, nb}, dist.blockSize());
+
   common::Pipeline<comm::CommunicatorGrid> serial_comm(std::move(grid));
 
   // for each reflector panel
   for (SizeType j_panel = 0; j_panel < (dist.nrTiles().cols() - 1); ++j_panel) {
-    MatrixT<Type> t(LocalElementSize{nb, nb}, dist.blockSize());   // used just by the column
-    MatrixT<Type> v0(LocalElementSize{nb, nb}, dist.blockSize());  // used just by the owner
+    MatrixT<Type> t(dist_block);   // used just by the column
+    MatrixT<Type> v0(dist_block);  // used just by the owner
 
     const GlobalTileIndex Ai_start_global{j_panel + 1, j_panel};
     const GlobalTileIndex At_start_global{Ai_start_global + GlobalTileSize{0, 1}};
@@ -1008,8 +1011,8 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
     const LocalTileSize At_size{Ai_size.rows(), dist.localNrTiles().cols() - At_start.col()};
 
     // distribution for local workspaces (useful for computations with trailing matrix At)
-    const matrix::Distribution dist_col({Ai_size.rows() * nb, Ai_size.cols() * nb}, dist.blockSize());
-    const matrix::Distribution dist_row({Ai_size.cols() * nb, At_size.cols() * nb}, dist.blockSize());
+    const Distribution dist_col({Ai_size.rows() * nb, Ai_size.cols() * nb}, dist.blockSize());
+    const Distribution dist_row({Ai_size.cols() * nb, At_size.cols() * nb}, dist.blockSize());
 
     print(mat_a, std::string("A_input") + std::to_string(j_panel));
 
@@ -1207,7 +1210,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
       compute_w(w, v, t);
 
     // W bcast row-wise
-    for (const LocalTileIndex index_w_loc : iterate_range2d(w.distribution().localNrTiles())) {
+    for (const LocalTileIndex index_w_loc : iterate_range2d(dist_col.localNrTiles())) {
       if (is_reflector_rank_col) {
         auto bcast_all_func = unwrapping([](const auto& tile_w, auto&& comm_wrapper) {
           broadcast::send(comm_wrapper().rowCommunicator(), make_data(tile_w));
@@ -1229,7 +1232,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
     MatrixT<Type> w_tmp(dist_row);
     set_to_zero(w_tmp);  // TODO superflous? if it is not used here, it will not be used later?
 
-    for (const LocalTileIndex index_x_loc : iterate_range2d(w_tmp.distribution().localNrTiles())) {
+    for (const LocalTileIndex index_x_loc : iterate_range2d(dist_row.localNrTiles())) {
       const SizeType index_x_row =
           dist.template globalTileFromLocalTile<Coord::Col>(index_x_loc.col() + At_start.col());
       const IndexT_MPI rank_row_owner = dist.template rankGlobalTile<Coord::Row>(index_x_row);
