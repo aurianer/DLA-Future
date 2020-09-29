@@ -12,8 +12,9 @@
 #include <cmath>
 #include <string>
 
+#include <hpx/future.hpp>
 #include <hpx/include/util.hpp>
-#include <hpx/local/future.hpp>
+#include <hpx/tuple.hpp>
 
 #include "dlaf/common/data.h"
 #include "dlaf/common/pipeline.h"
@@ -75,15 +76,6 @@ void trace(Ts&&...) {}
 #endif
 
 template <class Type>
-struct ReflectorParams {
-  Type norm;
-  Type x0;
-  Type y;
-  Type tau;
-  Type factor;
-};
-
-template <class Type>
 void set_to_zero(MatrixT<Type>& matrix) {
   dlaf::matrix::util::set(matrix, [](...) { return 0; });
 }
@@ -97,6 +89,11 @@ hpx::shared_future<T> compute_reflector(
   using common::make_data;
 
   using namespace comm::sync;
+
+  struct params_reflector_t {
+    T x0;
+    T y;
+  };
 
   using x0_and_squares_t = std::pair<T, T>;
 
@@ -167,56 +164,50 @@ hpx::shared_future<T> compute_reflector(
    */
   // 1A/2 COMPUTE PARAMS
   hpx::shared_future<T> tau;
-  hpx::shared_future<ReflectorParams<T>> reflector_params;
+  hpx::shared_future<params_reflector_t> reflector_params;
   if (rank_v0 == rank) {
-    auto compute_parameters_func =
-        unwrapping([](const x0_and_squares_t& x0_and_norm) {
-          ReflectorParams<T> params;
-          params.x0 = x0_and_norm.first;
+    auto compute_parameters_func = unwrapping([](const x0_and_squares_t& x0_and_norm) {
+      const T norm = std::sqrt(x0_and_norm.second);
 
-          // compute the norm
-          params.norm = std::sqrt(x0_and_norm.second);
+      // clang-format off
+      const params_reflector_t params{
+        x0_and_norm.first,
+        std::signbit(params.x0) ? norm : -norm
+      };
+      // clang-format on
 
-          // compute first component of the reflector
-          params.y = std::signbit(params.x0) ? params.norm : -params.norm;
+      const T tau = (params.y - params.x0) / params.y;
 
-          // compute tau
-          params.tau = (params.y - params.x0) / params.y;
-          const T tau = params.tau;
+      trace("COMPUTE REFLECTOR PARAMS");
+      trace("|x| = ", norm);
+      trace("x0  = ", params.x0);
+      trace("y   = ", params.y);
+      trace("tau = ", tau);
 
-          // compute k factor
-          params.factor = 1 / (params.x0 - params.y);
-
-          trace("COMPUTE REFLECTOR PARAMS");
-          trace("|x| = ", params.norm);
-          trace("x0  = ", params.x0);
-          trace("y   = ", params.y);
-          trace("tau = ", params.tau);
-
-          return hpx::make_tuple(params, tau);
-        });
+      return hpx::make_tuple(params, tau);
+    });
 
     hpx::tie(reflector_params, tau) = hpx::split_future(hpx::dataflow(compute_parameters_func, x0_and_squares));
 
-    auto bcast_params_func = unwrapping([](const auto& params, auto&& comm_wrapper) {
-      const T data[3] = {params.y, params.factor, params.tau};
+    auto bcast_params_func = unwrapping([](const auto& params, const T tau, auto&& comm_wrapper) {
+      const T data[3] = {params.x0, params.y, tau};
       broadcast::send(comm_wrapper().colCommunicator(), make_data(data, 3));
       trace("sending params", data[0], data[1], data[2]);
     });
 
-    hpx::dataflow(bcast_params_func, reflector_params, serial_comm());
+    hpx::dataflow(bcast_params_func, reflector_params, tau, serial_comm());
   }
   else {
     auto bcast_params_func = unwrapping([rank = rank_v0.row()](auto&& comm_wrapper) {
       trace("waiting params");
       T data[3];
       broadcast::receive_from(rank, comm_wrapper().colCommunicator(), make_data(data, 3));
-      ReflectorParams<T> params;
-      params.y = data[0];
-      params.factor = data[1];
-      params.tau = data[2];
+      params_reflector_t params;
+      params.x0 = data[0];
+      params.y = data[1];
+      const T tau = data[2];
       trace("received params", data[0], data[1], data[2]);
-      return hpx::make_tuple(params, params.tau);
+      return hpx::make_tuple(params, tau);
     });
 
     hpx::tie(reflector_params, tau) = hpx::split_future(hpx::dataflow(bcast_params_func, serial_comm()));
@@ -230,19 +221,18 @@ hpx::shared_future<T> compute_reflector(
 
     const bool has_first_component = (index_v_row == ai_start.row());
 
-    auto compute_reflector_func =
-        unwrapping([=](auto&& tile_v, const ReflectorParams<T>& params) {
-          if (has_first_component)
-            tile_v(index_el_x0) = params.y;
+    auto compute_reflector_func = unwrapping([=](auto&& tile_v, const params_reflector_t& params) {
+      if (has_first_component)
+        tile_v(index_el_x0) = params.y;
 
-          const SizeType first_tile_element = has_first_component ? index_el_x0.row() + 1 : 0;
+      const SizeType first_tile_element = has_first_component ? index_el_x0.row() + 1 : 0;
 
-          if (first_tile_element > tile_v.size().rows() - 1)
-            return;
+      if (first_tile_element > tile_v.size().rows() - 1)
+        return;
 
-          T* v = tile_v.ptr({first_tile_element, index_el_x0.col()});
-          blas::scal(tile_v.size().rows() - first_tile_element, params.factor, v, 1);
-        });
+      T* v = tile_v.ptr({first_tile_element, index_el_x0.col()});
+      blas::scal(tile_v.size().rows() - first_tile_element, 1 / (params.x0 - params.y), v, 1);
+    });
 
     hpx::dataflow(compute_reflector_func, a(index_v_loc), reflector_params);
   }
