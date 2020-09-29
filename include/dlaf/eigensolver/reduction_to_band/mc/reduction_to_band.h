@@ -402,8 +402,8 @@ void update_trailing_panel(MatrixT<T>& a, const LocalTileIndex ai_start_loc,
 template <class Type>
 void compute_t_factor(MatrixT<Type>& t, ConstMatrixT<Type>& a, const LocalTileIndex ai_start_loc,
                       const LocalTileSize ai_localsize, const GlobalTileIndex ai_start,
-                      const TileElementIndex index_el_x0,
-                      hpx::shared_future<Type> tau,
+                      const SizeType last_reflector,
+                      common::internal::vector<hpx::shared_future<Type>> taus,
                       common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
   using hpx::util::unwrapping;
   using common::make_data;
@@ -416,100 +416,103 @@ void compute_t_factor(MatrixT<Type>& t, ConstMatrixT<Type>& a, const LocalTileIn
   // 2. CALCULATE T-FACTOR
   // T(0:j, j) = T(0:j, 0:j) . -tau(j) . V(j:, 0:j)* . V(j:, j)
 
-  // 2A First step GEMV
-  const TileElementSize t_size{index_el_x0.row(), 1};
-  const TileElementIndex t_start{0, index_el_x0.col()};
-  for (const auto& index_tile_v : iterate_range2d(ai_start_loc, ai_localsize)) {
-    trace("* COMPUTING T", index_tile_v);
+  for (SizeType j_reflector = 0; j_reflector <= last_reflector; ++j_reflector) {
+    const TileElementIndex index_el_x0{j_reflector, j_reflector};
 
-    const SizeType index_tile_v_global =
-        dist.template globalTileFromLocalTile<Coord::Row>(index_tile_v.row());
+    // 2A First step GEMV
+    const TileElementSize t_size{index_el_x0.row(), 1};
+    const TileElementIndex t_start{0, index_el_x0.col()};
+    for (const auto& index_tile_v : iterate_range2d(ai_start_loc, ai_localsize)) {
+      trace("* COMPUTING T", index_tile_v);
 
-    const bool has_first_component = (index_tile_v_global == ai_start.row());
+      const SizeType index_tile_v_global =
+          dist.template globalTileFromLocalTile<Coord::Row>(index_tile_v.row());
 
-    // GEMV t = V(j:mV; 0:j)* . V(j:mV;j)
-    auto gemv_func =
-        unwrapping([=](auto&& tile_t, const Type tau, const auto& tile_v) {
-          const SizeType first_element_in_tile = has_first_component ? index_el_x0.row() + 1 : 0;
+      const bool has_first_component = (index_tile_v_global == ai_start.row());
 
-          // T(0:j, j) = -tau . V(j:, 0:j)* . V(j:, j)
-          // [j x 1] = [(n-j) x j]* . [(n-j) x 1]
-          const TileElementSize V_size{tile_v.size().rows() - first_element_in_tile, index_el_x0.col()};
-          const TileElementIndex Va_start{first_element_in_tile, 0};
-          const TileElementIndex Vb_start{first_element_in_tile, index_el_x0.col()};
+      // GEMV t = V(j:mV; 0:j)* . V(j:mV;j)
+      auto gemv_func = unwrapping([=](auto&& tile_t, const Type tau, const auto& tile_v) {
+        const SizeType first_element_in_tile = has_first_component ? index_el_x0.row() + 1 : 0;
 
-          // set tau on the diagonal
-          if (has_first_component) {
-            trace("t on diagonal", tau);
-            tile_t(index_el_x0) = tau;
+        // T(0:j, j) = -tau . V(j:, 0:j)* . V(j:, j)
+        // [j x 1] = [(n-j) x j]* . [(n-j) x 1]
+        const TileElementSize V_size{tile_v.size().rows() - first_element_in_tile, index_el_x0.col()};
+        const TileElementIndex Va_start{first_element_in_tile, 0};
+        const TileElementIndex Vb_start{first_element_in_tile, index_el_x0.col()};
 
-            // compute first component with implicit one
-            for (const auto& index_el_t : iterate_range2d(t_start, t_size)) {
-              const auto index_el_va = common::internal::transposed(index_el_t);
-              tile_t(index_el_t) = -tau * tile_v(index_el_va);
+        // set tau on the diagonal
+        if (has_first_component) {
+          trace("t on diagonal", tau);
+          tile_t(index_el_x0) = tau;
 
-              trace("tile_t", tile_t(index_el_t), -tau, tile_v(index_el_va));
-            }
+          // compute first component with implicit one
+          for (const auto& index_el_t : iterate_range2d(t_start, t_size)) {
+            const auto index_el_va = common::internal::transposed(index_el_t);
+            tile_t(index_el_t) = -tau * tile_v(index_el_va);
+
+            trace("tile_t", tile_t(index_el_t), -tau, tile_v(index_el_va));
           }
+        }
 
-          if (Va_start.row() < tile_v.size().rows() && Vb_start.row() < tile_v.size().rows()) {
-            trace("GEMV", Va_start, V_size, Vb_start);
-            for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
-              trace("t[", i_loc, "]", tile_t({i_loc, index_el_x0.col()}));
+        if (Va_start.row() < tile_v.size().rows() && Vb_start.row() < tile_v.size().rows()) {
+          trace("GEMV", Va_start, V_size, Vb_start);
+          for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
+            trace("t[", i_loc, "]", tile_t({i_loc, index_el_x0.col()}));
 
-            // t = -tau . V* . V
-            const Type alpha = -tau;
-            const Type beta = 1;
-            // clang-format off
-            blas::gemv(blas::Layout::ColMajor,
-                blas::Op::ConjTrans,
-                V_size.rows(), V_size.cols(),
-                alpha,
-                tile_v.ptr(Va_start), tile_v.ld(),
-                tile_v.ptr(Vb_start), 1,
-                beta, tile_t.ptr(t_start), 1);
-            // clang-format on
+          // t = -tau . V* . V
+          const Type alpha = -tau;
+          const Type beta = 1;
+          // clang-format off
+          blas::gemv(blas::Layout::ColMajor,
+              blas::Op::ConjTrans,
+              V_size.rows(), V_size.cols(),
+              alpha,
+              tile_v.ptr(Va_start), tile_v.ld(),
+              tile_v.ptr(Vb_start), 1,
+              beta, tile_t.ptr(t_start), 1);
+          // clang-format on
 
-            for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
-              trace("t*[", i_loc, "] ", tile_t({i_loc, index_el_x0.col()}));
-          }
-        });
+          for (SizeType i_loc = 0; i_loc < tile_t.size().rows(); ++i_loc)
+            trace("t*[", i_loc, "] ", tile_t({i_loc, index_el_x0.col()}));
+        }
+      });
 
-    hpx::dataflow(gemv_func, t(LocalTileIndex{0, 0}), tau, a.read(index_tile_v));
-  }
+      hpx::dataflow(gemv_func, t(LocalTileIndex{0, 0}), taus[j_reflector], a.read(index_tile_v));
+    }
 
-  // REDUCE after GEMV
-  if (!t_size.isEmpty()) {
-    auto reduce_t_func = unwrapping([=](auto&& tile_t, auto&& comm_wrapper) {
-      auto&& input_t = make_data(tile_t.ptr(t_start), t_size.rows());
-      std::vector<Type> out_data(t_size.rows());
-      auto&& output_t = make_data(out_data.data(), t_size.rows());
-      // TODO reduce just the current, otherwise reduce all together
-      reduce(rank_v0.row(), comm_wrapper().colCommunicator(), MPI_SUM, input_t, output_t);
-      common::copy(output_t, input_t);
-      trace("reducing", t_start, t_size.rows(), *tile_t.ptr());
-    });
+    // REDUCE after GEMV
+    if (!t_size.isEmpty()) {
+      auto reduce_t_func = unwrapping([=](auto&& tile_t, auto&& comm_wrapper) {
+        auto&& input_t = make_data(tile_t.ptr(t_start), t_size.rows());
+        std::vector<Type> out_data(t_size.rows());
+        auto&& output_t = make_data(out_data.data(), t_size.rows());
+        // TODO reduce just the current, otherwise reduce all together
+        reduce(rank_v0.row(), comm_wrapper().colCommunicator(), MPI_SUM, input_t, output_t);
+        common::copy(output_t, input_t);
+        trace("reducing", t_start, t_size.rows(), *tile_t.ptr());
+      });
 
-    // TODO just reducer needs RW
-    hpx::dataflow(reduce_t_func, t(LocalTileIndex{0, 0}), serial_comm());
-  }
+      // TODO just reducer needs RW
+      hpx::dataflow(reduce_t_func, t(LocalTileIndex{0, 0}), serial_comm());
+    }
 
-  // 2B Second Step TRMV
-  if (rank_v0 == rank) {
-    // TRMV t = T . t
-    auto trmv_func = unwrapping([=](auto&& tile_t) {
-      trace("trmv");
+    // 2B Second Step TRMV
+    if (rank_v0 == rank) {
+      // TRMV t = T . t
+      auto trmv_func = unwrapping([=](auto&& tile_t) {
+        trace("trmv");
 
-      // clang-format off
-      blas::trmv(blas::Layout::ColMajor,
-          blas::Uplo::Upper, blas::Op::NoTrans, blas::Diag::NonUnit,
-          t_size.rows(),
-          tile_t.ptr(), tile_t.ld(),
-          tile_t.ptr(t_start), 1);
-      // clang-format on
-    });
+        // clang-format off
+        blas::trmv(blas::Layout::ColMajor,
+            blas::Uplo::Upper, blas::Op::NoTrans, blas::Diag::NonUnit,
+            t_size.rows(),
+            tile_t.ptr(), tile_t.ld(),
+            tile_t.ptr(t_start), 1);
+        // clang-format on
+      });
 
-    hpx::dataflow(trmv_func, t(LocalTileIndex{0, 0}));
+      hpx::dataflow(trmv_func, t(LocalTileIndex{0, 0}));
+    }
   }
 }
 
@@ -1010,14 +1013,15 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
 
     // 1. PANEL
     if (is_reflector_rank_col) {
-      set_to_zero(t);  // TODO is it necessary?
-
       const SizeType Ai_start_row_el_global =
           dist.template globalElementFromGlobalTileAndTileElement<Coord::Row>(Ai_start_global.row(), 0);
       const SizeType Ai_el_size_rows_global = mat_a.size().rows() - Ai_start_row_el_global;
 
       trace(">>> COMPUTING panel");
       trace(">>> Ai", Ai_size, Ai_start);
+
+      const SizeType b = nb;  // TODO for the moment the panel is tile-wide
+      common::internal::vector<hpx::shared_future<Type>> taus(b);
 
       // for each column in the panel, compute reflector and update panel
       // if reflector would be just the first 1, skip the last column
@@ -1028,13 +1032,14 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
         trace(">>> COMPUTING local reflector", index_el_x0);
 
         auto tau = compute_reflector(mat_a, Ai_start, Ai_size, Ai_start_global, index_el_x0, serial_comm);
-
+        taus[j_reflector] = tau;
         update_trailing_panel(mat_a, Ai_start, Ai_size, Ai_start_global, index_el_x0, tau, serial_comm);
 
         print(mat_a, std::string("A") + std::to_string(j_panel));
-
-        compute_t_factor(t, mat_a, Ai_start, Ai_size, Ai_start_global, index_el_x0, tau, serial_comm);
       }
+
+      set_to_zero(t);  // TODO is it necessary?
+      compute_t_factor(t, mat_a, Ai_start, Ai_size, Ai_start_global, last_reflector, taus, serial_comm);
 
       // setup V0
       if (rank_v0 == rank) {
