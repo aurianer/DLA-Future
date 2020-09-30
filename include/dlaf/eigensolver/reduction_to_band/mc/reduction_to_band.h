@@ -17,6 +17,7 @@
 #include <hpx/tuple.hpp>
 
 #include "dlaf/common/data.h"
+#include "dlaf/common/index2d.h"
 #include "dlaf/common/pipeline.h"
 #include "dlaf/common/range2d.h"
 #include "dlaf/common/vector.h"
