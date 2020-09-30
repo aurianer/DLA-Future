@@ -80,6 +80,53 @@ void set_to_zero(MatrixT<Type>& matrix) {
   dlaf::matrix::util::set(matrix, [](...) { return 0; });
 }
 
+struct row_wise {};
+struct col_wise {};
+
+auto broadcast_task_send_impl(row_wise) {
+  using namespace comm::sync;
+  using common::make_data;
+
+  return [](const auto& source, auto&& comm_wrapper) {
+    broadcast::send(comm_wrapper().rowCommunicator(), make_data(source));
+  };
+}
+
+auto broadcast_task_send_impl(col_wise) {
+  using namespace comm::sync;
+  using common::make_data;
+
+  return [](const auto& source, auto&& comm_wrapper) {
+    broadcast::send(comm_wrapper().colCommunicator(), make_data(source));
+  };
+}
+
+auto broadcast_task_recv_impl(row_wise, const comm::IndexT_MPI rank) {
+  using namespace comm::sync;
+  using common::make_data;
+
+  return [=](auto&& dest, auto&& comm_wrapper) {
+    broadcast::receive_from(rank, comm_wrapper().rowCommunicator(), make_data(dest));
+  };
+}
+
+auto broadcast_task_recv_impl(col_wise, const comm::IndexT_MPI rank) {
+  using namespace comm::sync;
+  using common::make_data;
+
+  return [=](auto&& dest, auto&& comm_wrapper) {
+    broadcast::receive_from(rank, comm_wrapper().colCommunicator(), make_data(dest));
+  };
+}
+
+auto broadcast_send = [](auto&& row_or_col) {
+  return hpx::util::unwrapping(broadcast_task_send_impl(row_or_col));
+};
+
+auto broadcast_recv = [](auto&& row_or_col, const comm::IndexT_MPI rank) {
+  return hpx::util::unwrapping(broadcast_task_recv_impl(row_or_col, rank));
+};
+
 template <class T>
 hpx::shared_future<T> compute_reflector(MatrixT<T>& a, const LocalTileIndex ai_start_loc,
                                         const LocalTileSize ai_localsize, const GlobalTileIndex ai_start,
@@ -232,22 +279,12 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
      */
 
     // broadcast T
+    // TODO Avoid useless communication
     if (is_reflector_rank_col) {
-      if (rank_v0.row() == rank.row()) {
-        // TODO Avoid useless communication
-        auto send_bcast_f = unwrapping([](const auto& tile_t, auto&& comm_wrapper) {
-          broadcast::send(comm_wrapper().colCommunicator(), make_data(tile_t));
-        });
-
-        hpx::dataflow(send_bcast_f, t.read(LocalTileIndex{0, 0}), serial_comm());
-      }
-      else {
-        auto recv_bcast_f = unwrapping([=](auto&& tile_t, auto&& comm_wrapper) {
-          broadcast::receive_from(rank_v0.row(), comm_wrapper().colCommunicator(), make_data(tile_t));
-        });
-
-        hpx::dataflow(recv_bcast_f, t(LocalTileIndex{0, 0}), serial_comm());
-      }
+      if (rank_v0.row() == rank.row())
+        hpx::dataflow(broadcast_send(col_wise{}), t.read(LocalTileIndex{0, 0}), serial_comm());
+      else
+        hpx::dataflow(broadcast_recv(col_wise{}, rank_v0.row()), t(LocalTileIndex{0, 0}), serial_comm());
 
       print(t, std::string("T") + std::to_string(j_panel));
     }
@@ -264,14 +301,8 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
     MatrixT<Type> mat_v(dist_col);
     FutureConstPanel<Type> v(Ai_size.rows());
 
+    // TODO Avoid useless communication
     if (is_reflector_rank_col) {
-      // TODO Avoid useless communication
-      auto send_bcast_f = unwrapping([](const auto& tile_v, auto&& comm_wrapper) {
-        trace("Vrows -> sending");
-        print_tile(tile_v);
-        broadcast::send(comm_wrapper().rowCommunicator(), tile_v);
-      });
-
       for (const LocalTileIndex& index_v_loc : iterate_range2d(Ai_start, Ai_size)) {
         const SizeType index_v = dist.template globalTileFromLocalTile<Coord::Row>(index_v_loc.row());
 
@@ -283,21 +314,15 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
         else
           tile_v = mat_a.read(index_v_loc);
 
-        hpx::dataflow(send_bcast_f, tile_v, serial_comm());
+        hpx::dataflow(broadcast_send(row_wise{}), tile_v, serial_comm());
 
         const SizeType i_component = index_v_loc.row() - Ai_start.row();
         v[i_component] = tile_v;
       }
     }
     else {
-      auto recv_bcast_f = unwrapping([=](auto&& tile_v, auto&& comm_wrapper) {
-        trace("Vrows -> receiving");
-        broadcast::receive_from(rank_v0.col(), comm_wrapper().rowCommunicator(), tile_v);
-        print_tile(tile_v);
-      });
-
       for (const LocalTileIndex& index_v_loc : iterate_range2d(LocalTileIndex{0, 0}, Ai_size)) {
-        hpx::dataflow(recv_bcast_f, mat_v(index_v_loc), serial_comm());
+        hpx::dataflow(broadcast_recv(row_wise{}, rank_v0.col()), mat_v(index_v_loc), serial_comm());
 
         const SizeType i_component = index_v_loc.row();
         v[i_component] = mat_v.read(index_v_loc);
@@ -320,26 +345,15 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
             dist.template localTileFromGlobalTile<Coord::Row>(index_v) - At_start.row();
         FutureConstTile<Type> tile_v = v[index_tmp];
 
-        auto send_bcast_f = unwrapping([=](const auto& tile_v, auto&& comm_wrapper) {
-          trace("Vcols -> sending", index_tmp, index_v_loc, index_v);
-          print_tile(tile_v);
-          broadcast::send(comm_wrapper().colCommunicator(), tile_v);
-        });
-
-        hpx::dataflow(send_bcast_f, tile_v, serial_comm());
+        hpx::dataflow(broadcast_send(col_wise{}), tile_v, serial_comm());
 
         v_tmp[index_v_loc] = tile_v;
       }
       else {
         LocalTileIndex index_tile_v{0, index_v_loc};
 
-        auto recv_bcast_f = unwrapping([=](auto&& tile_v, auto&& comm_wrapper) {
-          trace("Vcols -> receiving", index_v_loc, index_v);
-          broadcast::receive_from(owner_rank_row, comm_wrapper().colCommunicator(), tile_v);
-          print_tile(tile_v);
-        });
-
-        hpx::dataflow(recv_bcast_f, mat_v_tmp(index_tile_v), serial_comm());
+        hpx::dataflow(broadcast_recv(col_wise{}, owner_rank_row), mat_v_tmp(index_tile_v),
+                      serial_comm());
 
         v_tmp[index_v_loc] = mat_v_tmp.read(index_tile_v);
       }
@@ -361,23 +375,11 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
       compute_w(w, v, t);
 
     // W bcast row-wise
-    for (const LocalTileIndex index_w_loc : iterate_range2d(dist_col.localNrTiles())) {
-      if (is_reflector_rank_col) {
-        auto bcast_all_func = unwrapping([](const auto& tile_w, auto&& comm_wrapper) {
-          broadcast::send(comm_wrapper().rowCommunicator(), make_data(tile_w));
-        });
-
-        hpx::dataflow(std::move(bcast_all_func), w.read(index_w_loc), serial_comm());
-      }
-      else {
-        auto bcast_all_func = unwrapping([rank_v0](auto&& tile_w, auto&& comm_wrapper) {
-          auto comm_grid = comm_wrapper();
-          broadcast::receive_from(rank_v0.col(), comm_grid.rowCommunicator(), make_data(tile_w));
-        });
-
-        hpx::dataflow(std::move(bcast_all_func), w(index_w_loc), serial_comm());
-      }
-    }
+    for (const LocalTileIndex index_w_loc : iterate_range2d(dist_col.localNrTiles()))
+      if (is_reflector_rank_col)
+        hpx::dataflow(broadcast_send(row_wise{}), w.read(index_w_loc), serial_comm());
+      else
+        hpx::dataflow(broadcast_recv(row_wise{}, rank_v0.col()), w(index_w_loc), serial_comm());
 
     // W* bcast col-wise
     MatrixT<Type> w_tmp(dist_row);
@@ -389,25 +391,17 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
       const IndexT_MPI rank_row_owner = dist.template rankGlobalTile<Coord::Row>(index_x_row);
 
       if (rank_row_owner == rank.row()) {
-        auto bcast_send_w_colwise_func = unwrapping([=](const auto& tile_w, auto&& comm_wrapper) {
-          broadcast::send(comm_wrapper().colCommunicator(), make_data(tile_w));
-        });
-
         const SizeType index_x_row_loc =
             dist.template localTileFromGlobalTile<Coord::Row>(index_x_row) - At_start.row();
 
         FutureConstTile<Type> tile_w = w.read(LocalTileIndex{index_x_row_loc, 0});
 
-        hpx::dataflow(std::move(bcast_send_w_colwise_func), std::move(tile_w), serial_comm());
+        hpx::dataflow(broadcast_send(col_wise{}), std::move(tile_w), serial_comm());
       }
       else {
-        auto bcast_recv_w_colwise_func = unwrapping([=](auto&& tile_w, auto&& comm_wrapper) {
-          broadcast::receive_from(rank_row_owner, comm_wrapper().colCommunicator(), make_data(tile_w));
-        });
-
         FutureTile<Type> tile_w = w_tmp(index_x_loc);
 
-        hpx::dataflow(std::move(bcast_recv_w_colwise_func), std::move(tile_w), serial_comm());
+        hpx::dataflow(broadcast_recv(col_wise{}, rank_row_owner), std::move(tile_w), serial_comm());
       }
     }
 
@@ -539,15 +533,11 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
      */
 
     // broadcast X rowwise
-    auto bcast_x_rowwise_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
-      if (is_reflector_rank_col)
-        broadcast::send(comm_wrapper().rowCommunicator(), make_data(tile_x));
-      else
-        broadcast::receive_from(rank_v0.col(), comm_wrapper().rowCommunicator(), make_data(tile_x));
-    });
-
     for (const LocalTileIndex& index_x_loc : iterate_range2d(x.distribution().localNrTiles()))
-      hpx::dataflow(bcast_x_rowwise_func, x(index_x_loc), serial_comm());
+      if (is_reflector_rank_col)
+        hpx::dataflow(broadcast_send(row_wise{}), x.read(index_x_loc), serial_comm());
+      else
+        hpx::dataflow(broadcast_recv(row_wise{}, rank_v0.col()), x(index_x_loc), serial_comm());
 
     // broadcast X colwise
     for (SizeType index_x_loc = 0; index_x_loc < At_size.cols(); ++index_x_loc) {
@@ -557,25 +547,14 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
       const SizeType rank_owner = dist.template rankGlobalTile<Coord::Row>(index_x_row);
 
       if (rank_owner == rank.row()) {
-        auto bcast_xupd_colwise_func = unwrapping([=](const auto& tile_x, auto&& comm_wrapper) {
-          trace("sending tile_x");
-          print_tile(tile_x);
-          broadcast::send(comm_wrapper().colCommunicator(), make_data(tile_x));
-        });
-
         const SizeType index_x_row_loc =
             dist.template localTileFromGlobalTile<Coord::Row>(index_x_row) - At_start.row();
 
-        hpx::dataflow(bcast_xupd_colwise_func, x(LocalTileIndex{index_x_row_loc, 0}), serial_comm());
+        hpx::dataflow(broadcast_send(col_wise{}), x(LocalTileIndex{index_x_row_loc, 0}), serial_comm());
       }
       else {
-        auto bcast_xupd_colwise_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
-          broadcast::receive_from(rank_owner, comm_wrapper().colCommunicator(), make_data(tile_x));
-          trace("received tile_x");
-          print_tile(tile_x);
-        });
-
-        hpx::dataflow(bcast_xupd_colwise_func, x_tmp(LocalTileIndex{0, index_x_loc}), serial_comm());
+        hpx::dataflow(broadcast_recv(col_wise{}, rank_owner), x_tmp(LocalTileIndex{0, index_x_loc}),
+                      serial_comm());
       }
     }
 
