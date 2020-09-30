@@ -197,10 +197,11 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
 
     const comm::Index2D rank_v0 = dist.rankGlobalTile(Ai_start_global);
 
-    const LocalTileIndex Ai_start{
+    const LocalTileSize ai_offset{
         dist.template nextLocalTileFromGlobalTile<Coord::Row>(Ai_start_global.row()),
         dist.template nextLocalTileFromGlobalTile<Coord::Col>(Ai_start_global.col()),
     };
+    const LocalTileIndex Ai_start{ai_offset.rows(), ai_offset.cols()};  // TODO trying to deprecate this
     const LocalTileSize Ai_size{dist.localNrTiles().rows() - Ai_start.row(), 1};
 
     const LocalTileIndex At_start{
@@ -302,31 +303,29 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
     FutureConstPanel<Type> v(Ai_size.rows());
 
     // TODO Avoid useless communication
-    if (is_reflector_rank_col) {
-      for (const LocalTileIndex& index_v_loc : iterate_range2d(Ai_start, Ai_size)) {
-        const SizeType index_v = dist.template globalTileFromLocalTile<Coord::Row>(index_v_loc.row());
+    for (const LocalTileIndex& index_v_loc : iterate_range2d(dist_col.localNrTiles())) {
+      FutureConstTile<Type> tile_v;
 
-        const bool is_component0 = (index_v == Ai_start_global.row());
+      if (is_reflector_rank_col) {
+        const SizeType index_v =
+            dist.template globalTileFromLocalTile<Coord::Row>((index_v_loc + ai_offset).row());
 
-        FutureConstTile<Type> tile_v;
-        if (is_component0)
+        const bool is_v0_tile = (index_v == Ai_start_global.row());
+
+        if (is_v0_tile)
           tile_v = v0.read(LocalTileIndex{0, 0});
         else
-          tile_v = mat_a.read(index_v_loc);
+          tile_v = mat_a.read(index_v_loc + ai_offset);
 
         hpx::dataflow(broadcast_send(row_wise{}), tile_v, serial_comm());
-
-        const SizeType i_component = index_v_loc.row() - Ai_start.row();
-        v[i_component] = tile_v;
       }
-    }
-    else {
-      for (const LocalTileIndex& index_v_loc : iterate_range2d(LocalTileIndex{0, 0}, Ai_size)) {
+      else {
         hpx::dataflow(broadcast_recv(row_wise{}, rank_v0.col()), mat_v(index_v_loc), serial_comm());
 
-        const SizeType i_component = index_v_loc.row();
-        v[i_component] = mat_v.read(index_v_loc);
+        tile_v = mat_v.read(index_v_loc);
       }
+
+      v[index_v_loc.row()] = tile_v;
     }
 
     DLAF_ASSERT_HEAVY(Ai_size.rows() == v.size(), Ai_size.rows(), v.size());
