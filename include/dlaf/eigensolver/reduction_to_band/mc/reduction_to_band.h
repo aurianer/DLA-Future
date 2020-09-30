@@ -753,7 +753,8 @@ hpx::shared_future<T> compute_reflector(MatrixT<T>& a, const LocalTileIndex ai_s
         return;
 
       T* v = tile_v.ptr({first_tile_element, index_el_x0.col()});
-      blas::scal(tile_v.size().rows() - first_tile_element, 1 / (params.x0 - params.y), v, 1);
+      blas::scal(tile_v.size().rows() - first_tile_element,
+                 typename TypeInfo<T>::BaseType(1) / (params.x0 - params.y), v, 1);
     });
 
     hpx::dataflow(compute_reflector_func, a(index_v_loc), reflector_params);
