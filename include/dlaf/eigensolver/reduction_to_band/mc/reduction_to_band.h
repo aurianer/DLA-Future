@@ -153,7 +153,7 @@ void compute_w(MatrixT<T>& w, FutureConstPanel<T> v, ConstMatrixT<T>& t);
 // TODO document that it stores in Xcols just the ones for which he is not on the right row,
 // otherwise it directly compute also gemm2 inside Xrows
 template <class T>
-void compute_x(MatrixT<T>& x, MatrixT<T>& x_tmp, const LocalTileIndex at_start, ConstMatrixT<T>& a,
+void compute_x(MatrixT<T>& x, MatrixT<T>& x_tmp, const LocalTileSize at_offset, ConstMatrixT<T>& a,
                ConstMatrixT<T>& w, ConstMatrixT<T>& w_tmp);
 
 template <class T>
@@ -439,7 +439,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
     set_to_zero(x_tmp);
 
     // HEMM X = At . W
-    compute_x(x, x_tmp, At_start, mat_a, w, w_tmp);
+    compute_x(x, x_tmp, at_offset, mat_a, w, w_tmp);
 
     print(x, "Xpre-rows");
     print(x_tmp, "Xpre-cols");
@@ -1060,7 +1060,7 @@ void compute_w(MatrixT<T>& w, FutureConstPanel<T> v, ConstMatrixT<T>& t) {
 // TODO document that it stores in Xcols just the ones for which he is not on the right row,
 // otherwise it directly compute also gemm2 inside Xrows
 template <class T>
-void compute_x(MatrixT<T>& x, MatrixT<T>& x_tmp, const LocalTileIndex at_start, ConstMatrixT<T>& a,
+void compute_x(MatrixT<T>& x, MatrixT<T>& x_tmp, const LocalTileSize at_offset, ConstMatrixT<T>& a,
                ConstMatrixT<T>& w, ConstMatrixT<T>& w_tmp) {
   using hpx::util::unwrapping;
 
@@ -1142,24 +1142,24 @@ void compute_x(MatrixT<T>& x, MatrixT<T>& x_tmp, const LocalTileIndex at_start, 
   const auto dist = a.distribution();
   const comm::Index2D rank = dist.rankIndex();
 
-  for (SizeType i = at_start.row(); i < dist.localNrTiles().rows(); ++i) {
+  for (SizeType i = at_offset.rows(); i < dist.localNrTiles().rows(); ++i) {
     const comm::IndexT_MPI limit = dist.template nextLocalTileFromGlobalTile<Coord::Col>(
         dist.template globalTileFromLocalTile<Coord::Row>(i) + 1);
-    for (SizeType j = at_start.col(); j < limit; ++j) {
-      const LocalTileIndex index_at{i, j};
+    for (SizeType j = at_offset.cols(); j < limit; ++j) {
+      const LocalTileIndex index_at_wrt_a{i, j};
 
       // TODO possible FIXME? I would add at_start
-      const GlobalTileIndex index_a = dist.globalTileIndex(index_at);
+      const GlobalTileIndex index_a = dist.globalTileIndex(index_at_wrt_a);
 
       const bool is_diagonal_tile = (index_a.row() == index_a.col());
 
       if (is_diagonal_tile) {
-        const LocalTileIndex index_x{index_at.row() - at_start.row(), 0};
-        const LocalTileIndex index_w{index_at.row() - at_start.row(), 0};
+        const LocalTileIndex index_x{index_at_wrt_a.row() - at_offset.rows(), 0};
+        const LocalTileIndex index_w{index_at_wrt_a.row() - at_offset.rows(), 0};
 
         // clang-format off
         FutureTile<T>       tile_x = x(index_x);
-        FutureConstTile<T>  tile_a = a.read(index_at);
+        FutureConstTile<T>  tile_a = a.read(index_at_wrt_a);
         FutureConstTile<T>  tile_w = w.read(index_w);
         // clang-format on
 
@@ -1168,11 +1168,11 @@ void compute_x(MatrixT<T>& x, MatrixT<T>& x_tmp, const LocalTileIndex at_start, 
       else {
         // A  . W
         {
-          const LocalTileIndex index_x{index_at.row() - at_start.row(), 0};
+          const LocalTileIndex index_x{index_at_wrt_a.row() - at_offset.rows(), 0};
 
           // clang-format off
           FutureTile<T>       tile_x = x(index_x);
-          FutureConstTile<T>  tile_a = a.read(index_at);
+          FutureConstTile<T>  tile_a = a.read(index_at_wrt_a);
           FutureConstTile<T>  tile_w;
           // clang-format on
 
@@ -1180,14 +1180,14 @@ void compute_x(MatrixT<T>& x, MatrixT<T>& x_tmp, const LocalTileIndex at_start, 
           if (own_w) {
             const SizeType index_a_row =
                 dist.template localTileFromGlobalTile<Coord::Row>(index_a.col());
-            const LocalTileIndex index_w{index_a_row - at_start.row(), 0};
+            const LocalTileIndex index_w{index_a_row - at_offset.rows(), 0};
 
             tile_w = w.read(index_w);
           }
           else {
             const SizeType index_tmp = dist.template localTileFromGlobalTile<Coord::Col>(index_a.col());
-            const LocalTileIndex index_tile_w{0, index_tmp - at_start.col()};
-            DLAF_ASSERT(index_tmp == index_at.col(),
+            const LocalTileIndex index_tile_w{0, index_tmp - at_offset.cols()};
+            DLAF_ASSERT(index_tmp == index_at_wrt_a.col(),
                         "");  // TODO if this is true, index_tmp can be replaced
 
             tile_w = w_tmp.read(index_tile_w);
@@ -1198,10 +1198,10 @@ void compute_x(MatrixT<T>& x, MatrixT<T>& x_tmp, const LocalTileIndex at_start, 
 
         // A* . W
         {
-          const LocalTileIndex index_w{index_at.row() - at_start.row(), 0};
+          const LocalTileIndex index_w{index_at_wrt_a.row() - at_offset.rows(), 0};
 
           // clang-format off
-          FutureConstTile<T>  tile_a = a.read(index_at);
+          FutureConstTile<T>  tile_a = a.read(index_at_wrt_a);
           FutureConstTile<T>  tile_w = w.read(index_w);
           FutureTile<T>       tile_x_h;
           // clang-format on
@@ -1210,11 +1210,11 @@ void compute_x(MatrixT<T>& x, MatrixT<T>& x_tmp, const LocalTileIndex at_start, 
           const bool own_x = rank.row() == dist.template rankGlobalTile<Coord::Row>(index_a.col());
           if (own_x) {
             const SizeType index_tmp = dist.template localTileFromGlobalTile<Coord::Row>(index_a.col());
-            const LocalTileIndex index_x_h{index_tmp - at_start.row(), 0};
+            const LocalTileIndex index_x_h{index_tmp - at_offset.rows(), 0};
             tile_x_h = x(index_x_h);
           }
           else {
-            const LocalTileIndex index_x_h{0, index_at.col() - at_start.col()};
+            const LocalTileIndex index_x_h{0, index_at_wrt_a.col() - at_offset.cols()};
             tile_x_h = x_tmp(index_x_h);
           }
 
