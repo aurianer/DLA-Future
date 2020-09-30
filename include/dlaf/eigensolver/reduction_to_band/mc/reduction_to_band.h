@@ -182,12 +182,12 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
   const comm::Index2D rank = dist.rankIndex();
 
   const SizeType nb = mat_a.blockSize().rows();
+  const SizeType b = nb;  // TODO not yet implemented for the moment the panel is tile-wide
 
   const Distribution dist_block(LocalElementSize{nb, nb}, dist.blockSize());
 
   common::Pipeline<comm::CommunicatorGrid> serial_comm(std::move(grid));
 
-  // for each reflector panel
   for (SizeType j_panel = 0; j_panel < (dist.nrTiles().cols() - 1); ++j_panel) {
     MatrixT<Type> t(dist_block);   // used just by the column
     MatrixT<Type> v0(dist_block);  // used just by the owner
@@ -204,22 +204,23 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
     const LocalTileIndex Ai_start{ai_offset.rows(), ai_offset.cols()};  // TODO trying to deprecate this
     const LocalTileSize Ai_size{dist.localNrTiles().rows() - Ai_start.row(), 1};
 
-    const LocalTileIndex At_start{
-        Ai_start.row(),
+    const LocalTileSize at_offset{
+        ai_offset.rows(),
         dist.template nextLocalTileFromGlobalTile<Coord::Col>(At_start_global.col()),
     };
-    const LocalTileSize At_size{Ai_size.rows(), dist.localNrTiles().cols() - At_start.col()};
+    const LocalTileIndex At_start{at_offset.rows(), at_offset.cols()};
+    const LocalTileSize at_localsize{Ai_size.rows(), dist.localNrTiles().cols() - At_start.col()};
 
     // distribution for local workspaces (useful for computations with trailing matrix At)
     const Distribution dist_col({Ai_size.rows() * nb, Ai_size.cols() * nb}, dist.blockSize());
-    const Distribution dist_row({Ai_size.cols() * nb, At_size.cols() * nb}, dist.blockSize());
+    const Distribution dist_row({Ai_size.cols() * nb, at_localsize.cols() * nb}, dist.blockSize());
 
     print(mat_a, std::string("A_input") + std::to_string(j_panel));
 
-    const bool is_reflector_rank_col = rank_v0.col() == rank.col();
+    const bool is_panel_rank_col = rank_v0.col() == rank.col();
 
     // 1. PANEL
-    if (is_reflector_rank_col) {
+    if (is_panel_rank_col) {
       const SizeType Ai_start_row_el_global =
           dist.template globalElementFromGlobalTileAndTileElement<Coord::Row>(Ai_start_global.row(), 0);
       const SizeType Ai_el_size_rows_global = mat_a.size().rows() - Ai_start_row_el_global;
@@ -227,7 +228,6 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
       trace(">>> COMPUTING panel");
       trace(">>> Ai", Ai_size, Ai_start);
 
-      const SizeType b = nb;  // TODO for the moment the panel is tile-wide
       common::internal::vector<hpx::shared_future<Type>> taus(b);
 
       // for each column in the panel, compute reflector and update panel
@@ -281,7 +281,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
 
     // broadcast T
     // TODO Avoid useless communication
-    if (is_reflector_rank_col) {
+    if (is_panel_rank_col) {
       if (rank_v0.row() == rank.row())
         hpx::dataflow(broadcast_send(col_wise{}), t.read(LocalTileIndex{0, 0}), serial_comm());
       else
@@ -290,117 +290,133 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
       print(t, std::string("T") + std::to_string(j_panel));
     }
 
-    /*
-     * V is computed on the first column, than everyone has to know the ones corresponding to
-     * its row and column.
-     *
-     * So, every rank receives the former from his row (from the rank the on in the v0 column)
-     * and then the column can receive the letter from the diagonal one
-     */
-
-    // communicate V row-wise
+    // Here two things are being done:
+    // - letting each rank of the row get the V tile of the row they belong to
+    // - setting up an easy and uniform access to V tiles through a vector
+    //
+    // The former step sees the column of ranks owning the Ai panel to send their tiles row-wise.
+    //
+    // The latter step is needed because reflector components are stored in the original matrix
+    // but the first tile V0 has to be stored away (see V0 setup above)
     MatrixT<Type> mat_v(dist_col);
     FutureConstPanel<Type> v(Ai_size.rows());
 
     // TODO Avoid useless communication
-    for (const LocalTileIndex& index_v_loc : iterate_range2d(dist_col.localNrTiles())) {
+    for (const auto& index_v : iterate_range2d(dist_col.localNrTiles())) {
       FutureConstTile<Type> tile_v;
 
-      if (is_reflector_rank_col) {
-        const SizeType index_v =
-            dist.template globalTileFromLocalTile<Coord::Row>((index_v_loc + ai_offset).row());
+      if (is_panel_rank_col) {
+        const auto local_v_wrt_a = index_v + ai_offset;
+        const SizeType row_v_wrt_a =
+            dist.template globalTileFromLocalTile<Coord::Row>(local_v_wrt_a.row());
 
-        const bool is_v0_tile = (index_v == Ai_start_global.row());
+        const bool is_v0_tile = (row_v_wrt_a == Ai_start_global.row());
 
         if (is_v0_tile)
           tile_v = v0.read(LocalTileIndex{0, 0});
         else
-          tile_v = mat_a.read(index_v_loc + ai_offset);
+          tile_v = mat_a.read(local_v_wrt_a);
 
         hpx::dataflow(broadcast_send(row_wise{}), tile_v, serial_comm());
       }
       else {
-        hpx::dataflow(broadcast_recv(row_wise{}, rank_v0.col()), mat_v(index_v_loc), serial_comm());
+        hpx::dataflow(broadcast_recv(row_wise{}, rank_v0.col()), mat_v(index_v), serial_comm());
 
-        tile_v = mat_v.read(index_v_loc);
+        tile_v = mat_v.read(index_v);
       }
 
-      v[index_v_loc.row()] = tile_v;
+      v[index_v.row()] = tile_v;
     }
 
     DLAF_ASSERT_HEAVY(Ai_size.rows() == v.size(), Ai_size.rows(), v.size());
 
-    // communicate Vcols col-wise
+    // Here we are setting up the "transposed" version of V, the panel with reflectors tiles
+    // v_tmp is not transposed in values, it is just a way to quickly and easily reference
+    // the tile at the row, through the transposed column coordinate
+    //
+    // It exploits the fact that each rank already received the V of its row, so each one acts
+    // as owner of the row info for its column
+    //
+    // Morevoer, also in this case an easy access to the tile is provided through a vector.
+    // This allows to uniformly access the right tile just by giving the transposed column
+    // coordinate, without carying whether it is stored in the mat_v_tmp workspace or not
     MatrixT<Type> mat_v_tmp(dist_row);
-    FutureConstPanel<Type> v_tmp(At_size.cols());
+    FutureConstPanel<Type> v_tmp(at_localsize.cols());
 
-    for (SizeType index_v_loc = 0; index_v_loc < At_size.cols(); ++index_v_loc) {
-      const auto index_v =
-          dist.template globalTileFromLocalTile<Coord::Col>(index_v_loc + At_start.col());
-      const SizeType owner_rank_row = dist.template rankGlobalTile<Coord::Row>(index_v);
+    // TODO Avoid useless communication
+    for (const auto& index_v : iterate_range2d(dist_row.localNrTiles())) {
+      const SizeType local_col_v_wrt_a = (index_v + at_offset).col();
+      const auto col_v_wrt_a = dist.template globalTileFromLocalTile<Coord::Col>(local_col_v_wrt_a);
 
-      if (owner_rank_row == rank.row()) {
-        const SizeType index_tmp =
-            dist.template localTileFromGlobalTile<Coord::Row>(index_v) - At_start.row();
-        FutureConstTile<Type> tile_v = v[index_tmp];
+      // here the matching between transposed column and row is done,
+      // in addition to exploiting that the entire row owns the same information
+      const IndexT_MPI row_rank_owner = dist.template rankGlobalTile<Coord::Row>(col_v_wrt_a);
+
+      FutureConstTile<Type> tile_v;
+
+      if (row_rank_owner == rank.row()) {
+        const SizeType row_v_owner =
+            dist.template localTileFromGlobalTile<Coord::Row>(col_v_wrt_a) - at_offset.rows();
+        tile_v = v[row_v_owner];
 
         hpx::dataflow(broadcast_send(col_wise{}), tile_v, serial_comm());
-
-        v_tmp[index_v_loc] = tile_v;
       }
       else {
-        LocalTileIndex index_tile_v{0, index_v_loc};
+        hpx::dataflow(broadcast_recv(col_wise{}, row_rank_owner), mat_v_tmp(index_v), serial_comm());
 
-        hpx::dataflow(broadcast_recv(col_wise{}, owner_rank_row), mat_v_tmp(index_tile_v),
-                      serial_comm());
-
-        v_tmp[index_v_loc] = mat_v_tmp.read(index_tile_v);
+        tile_v = mat_v_tmp.read(index_v);
       }
+
+      v_tmp[index_v.col()] = tile_v;
     }
 
-    DLAF_ASSERT_HEAVY(At_size.cols() == v_tmp.size(), At_size.cols(), v_tmp.size());
+    DLAF_ASSERT_HEAVY(at_localsize.cols() == v_tmp.size(), at_localsize.cols(), v_tmp.size());
 
     print(mat_v_tmp, "Vcols");
 
     // 3 UPDATE TRAILING MATRIX
     trace(">>> UPDATE TRAILING MATRIX", j_panel);
-    trace(">>> At", At_size, At_start);
+    trace(">>> At", at_localsize, At_start);
 
     // 3A COMPUTE W
+    // Just the column of ranks owning the Ai panel, compute the W
     MatrixT<Type> w(dist_col);
+    if (is_panel_rank_col)
+      compute_w(w, v, t);  // TRMM W = V . T
 
-    // TRMM W = V . T
-    if (is_reflector_rank_col)
-      compute_w(w, v, t);
-
-    // W bcast row-wise
-    for (const LocalTileIndex index_w_loc : iterate_range2d(dist_col.localNrTiles()))
-      if (is_reflector_rank_col)
+    // Then it is broadcasted as before, both row-wise ...
+    for (const auto& index_w_loc : iterate_range2d(dist_col.localNrTiles()))
+      if (is_panel_rank_col)
         hpx::dataflow(broadcast_send(row_wise{}), w.read(index_w_loc), serial_comm());
       else
         hpx::dataflow(broadcast_recv(row_wise{}, rank_v0.col()), w(index_w_loc), serial_comm());
 
-    // W* bcast col-wise
+    // ... and column-wise
+    // Again, this uses the same concept as before for v_tmp.
     MatrixT<Type> w_tmp(dist_row);
     set_to_zero(w_tmp);  // TODO superflous? if it is not used here, it will not be used later?
 
-    for (const LocalTileIndex index_x_loc : iterate_range2d(dist_row.localNrTiles())) {
-      const SizeType index_x_row =
-          dist.template globalTileFromLocalTile<Coord::Col>(index_x_loc.col() + At_start.col());
-      const IndexT_MPI rank_row_owner = dist.template rankGlobalTile<Coord::Row>(index_x_row);
+    // TODO evaluate to source-mask also here
+    for (const auto& index_w : iterate_range2d(dist_row.localNrTiles())) {
+      const SizeType local_col_w_wrt_a = (index_w + at_offset).col();
+      const SizeType col_w_wrt_a = dist.template globalTileFromLocalTile<Coord::Col>(local_col_w_wrt_a);
 
-      if (rank_row_owner == rank.row()) {
-        const SizeType index_x_row_loc =
-            dist.template localTileFromGlobalTile<Coord::Row>(index_x_row) - At_start.row();
+      const IndexT_MPI row_rank_owner = dist.template rankGlobalTile<Coord::Row>(col_w_wrt_a);
 
-        FutureConstTile<Type> tile_w = w.read(LocalTileIndex{index_x_row_loc, 0});
+      if (row_rank_owner == rank.row()) {
+        const LocalTileIndex index_w_owner{dist.template localTileFromGlobalTile<Coord::Row>(
+                                               col_w_wrt_a) -
+                                               at_offset.rows(),
+                                           0};
+
+        FutureConstTile<Type> tile_w = w.read(index_w_owner);
 
         hpx::dataflow(broadcast_send(col_wise{}), std::move(tile_w), serial_comm());
       }
       else {
-        FutureTile<Type> tile_w = w_tmp(index_x_loc);
+        FutureTile<Type> tile_w = w_tmp(index_w);
 
-        hpx::dataflow(broadcast_recv(col_wise{}, rank_row_owner), std::move(tile_w), serial_comm());
+        hpx::dataflow(broadcast_recv(col_wise{}, row_rank_owner), std::move(tile_w), serial_comm());
       }
     }
 
@@ -408,14 +424,14 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
     print(w_tmp, "W_conj");
 
     // 3B COMPUTE X
-    /*
-     * Since At is hermitian, just the lower part is referenced.
-     * When the tile is not part of the main diagonal, the same tile has to be used for two computations
-     * that will contribute to two different rows of X: the ones indexed with row and col.
-     * This is achieved by storing the two results in two different workspaces for X, X and X_conj respectively.
-     */
-    MatrixT<Type> x({(At_size.rows() != 0 ? At_size.rows() : 1) * nb, nb}, dist.blockSize());
-    MatrixT<Type> x_tmp({nb, (At_size.cols() != 0 ? At_size.cols() : 1) * nb}, dist.blockSize());
+
+    // Since At is hermitian, just the lower part is referenced.
+    // When the tile is not part of the main diagonal, the same tile has to be used for two computations
+    // that will contribute to two different rows of X: the ones indexed with row and col.
+    // This is achieved by storing the two results in two different workspaces: X and X_conj respectively.
+    MatrixT<Type> x({(at_localsize.rows() != 0 ? at_localsize.rows() : 1) * nb, nb}, dist.blockSize());
+    MatrixT<Type> x_tmp({nb, (at_localsize.cols() != 0 ? at_localsize.cols() : 1) * nb},
+                        dist.blockSize());
 
     // TODO maybe it may be enough doing it if (At_size.isEmpty())
     set_to_zero(x);
@@ -427,18 +443,15 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
     print(x, "Xpre-rows");
     print(x_tmp, "Xpre-cols");
 
-    /*
-     * The result for X has to be reduced using both Xrows and Xcols.
-     */
+    // X has to be reduce by row-wise and col-wise, and the final result will be available just on the Ai panel column
 
-    // reducing X col-wise
-    /*
-     * TODO possible FIXME cannot use iterate_range2d over x_tmp distribution because otherwise it would
-     * enter for non used columns and it will fail
-     */
-    for (SizeType i_component = 0; i_component < At_size.cols(); ++i_component) {
+    // TODO possible FIXME cannot use iterate_range2d over x_tmp distribution because otherwise it would
+    // enter for non used columns and it will fail
+
+    // So, reduce row-wise ...
+    for (const auto& index_x : iterate_range2d(dist_row.localNrTiles())) {
       const SizeType index_x_row =
-          dist.template globalTileFromLocalTile<Coord::Col>(i_component + At_start.col());
+          dist.template globalTileFromLocalTile<Coord::Col>((index_x + at_offset).col());
 
       const IndexT_MPI rank_owner_row = dist.template rankGlobalTile<Coord::Row>(index_x_row);
 
@@ -457,7 +470,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
         });
 
         const SizeType index_x_row_loc =
-            dist.template localTileFromGlobalTile<Coord::Row>(index_x_row) - At_start.row();
+            dist.template localTileFromGlobalTile<Coord::Row>(index_x_row) - at_offset.rows();
 
         FutureTile<Type> tile_x = x(LocalTileIndex{index_x_row_loc, 0});
 
@@ -467,7 +480,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
         auto reduce_x_func = unwrapping([=](auto&& tile_x_conj, auto&& comm_wrapper) {
           auto comm_grid = comm_wrapper();
 
-          trace("reducing send X col-wise", rank_owner_row, index_x_row, "x", i_component);
+          trace("reducing send X col-wise");
           print_tile(tile_x_conj);
 
           Type fake;
@@ -475,7 +488,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
                  make_data(&fake, 0));
         });
 
-        FutureConstTile<Type> tile_x = x_tmp.read(LocalTileIndex{0, i_component});
+        FutureConstTile<Type> tile_x = x_tmp.read(index_x);
 
         hpx::dataflow(reduce_x_func, std::move(tile_x), serial_comm());
       }
@@ -483,30 +496,23 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
 
     print(x, "Xint");
 
-    /*
-     * TODO on rank not in V column, the first data is not referenced/used
-     * for the reducers, it happens in-place
-     * it can be splitted for read only management of the tiles on senders' side
-     */
-    /*
-     * TODO Check if for the same reason as before, iterate_range2d cannot be used over x distribution
-     */
-    for (SizeType index_x = 0; index_x < At_size.rows(); ++index_x) {
-      auto reduce_x_func = unwrapping([rank_v0](auto&& tile_x, auto&& comm_wrapper) {
-        reduce(rank_v0.col(), comm_wrapper().rowCommunicator(), MPI_SUM, make_data(tile_x),
-               make_data(tile_x));
-      });
+    /// ... and reduce X col-wise
+    auto reduce_x_func = unwrapping([rank_v0](auto&& tile_x, auto&& comm_wrapper) {
+      reduce(rank_v0.col(), comm_wrapper().rowCommunicator(), MPI_SUM, make_data(tile_x),
+             make_data(tile_x));
+    });
 
-      hpx::dataflow(reduce_x_func, x(LocalTileIndex{index_x, 0}), serial_comm());
-    }
+    // TODO readonly tile management
+    for (const auto& index_x_loc : iterate_range2d(dist_col.localNrTiles()))
+      hpx::dataflow(reduce_x_func, x(index_x_loc), serial_comm());
 
-    // 3C COMPUTE W2
-    /*
-     * W2 can be computed by the first column only, which is the only one that has the X result
-     */
-    if (is_reflector_rank_col) {
+    // Now the intermediate result for X is available on the panel column rank,
+    // which has locally all the needed stuff for updating X and finalize the result
+    if (is_panel_rank_col) {
       print(x, "Xpre");
 
+      // 3C COMPUTE W2
+      // W2 can be computed by the panel column rank only, it is the only one that has the X
       MatrixT<Type> w2 = std::move(t);
       set_to_zero(w2);  // superflous? I don't think so, because if any tile does not participate, it has
                         // to not contribute with any value
@@ -521,39 +527,37 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
       print(x, "X");
     }
 
-    /*
-     * Then the X has to be communicated to everyone, since it will be used by all ranks
-     * in the last step for updating the trailing matrix.
-     *
-     * Each cell of the lower part of At, in order to be updated, requires both the X from the
-     * row and from the column (because it will use the transposed X).
-     *
-     * So, as first step each row i will get the X(i) tile, then each column j will get the X(j)
-     */
+    // The finalized X result has to be known by everyone, since it will be used by all ranks
+    // for updating the trailing matrix.
+    //
+    // In particular, each cell of the lower part of At, in order to be updated, requires both
+    // the X and its conjugated version.
+    // This means that even in this case, as we did before for other workspaces, each row must know
+    // the X tile of the row they belong to, in addition to the X tile of the equivalent transposed column
 
-    // broadcast X rowwise
-    for (const LocalTileIndex& index_x_loc : iterate_range2d(x.distribution().localNrTiles()))
-      if (is_reflector_rank_col)
-        hpx::dataflow(broadcast_send(row_wise{}), x.read(index_x_loc), serial_comm());
+    // So, broadcast X row-wise...
+    for (const auto& index_x : iterate_range2d(x.distribution().localNrTiles()))
+      if (is_panel_rank_col)
+        hpx::dataflow(broadcast_send(row_wise{}), x.read(index_x), serial_comm());
       else
-        hpx::dataflow(broadcast_recv(row_wise{}, rank_v0.col()), x(index_x_loc), serial_comm());
+        hpx::dataflow(broadcast_recv(row_wise{}, rank_v0.col()), x(index_x), serial_comm());
 
-    // broadcast X colwise
-    for (SizeType index_x_loc = 0; index_x_loc < At_size.cols(); ++index_x_loc) {
-      const auto index_x_row =
-          dist.template globalTileFromLocalTile<Coord::Col>(index_x_loc + At_start.col());
+    // ... and broadcast X col-wise
+    for (const auto& index_x : iterate_range2d(dist_row.localNrTiles())) {
+      const auto col_x_wrt_a =
+          dist.template globalTileFromLocalTile<Coord::Col>((index_x + at_offset).col());
 
-      const SizeType rank_owner = dist.template rankGlobalTile<Coord::Row>(index_x_row);
+      const SizeType rank_owner = dist.template rankGlobalTile<Coord::Row>(col_x_wrt_a);
 
       if (rank_owner == rank.row()) {
-        const SizeType index_x_row_loc =
-            dist.template localTileFromGlobalTile<Coord::Row>(index_x_row) - At_start.row();
+        const LocalTileIndex row_x_owner{dist.template localTileFromGlobalTile<Coord::Row>(col_x_wrt_a) -
+                                             at_offset.rows(),
+                                         0};
 
-        hpx::dataflow(broadcast_send(col_wise{}), x(LocalTileIndex{index_x_row_loc, 0}), serial_comm());
+        hpx::dataflow(broadcast_send(col_wise{}), x(row_x_owner), serial_comm());
       }
       else {
-        hpx::dataflow(broadcast_recv(col_wise{}, rank_owner), x_tmp(LocalTileIndex{0, index_x_loc}),
-                      serial_comm());
+        hpx::dataflow(broadcast_recv(col_wise{}, rank_owner), x_tmp(index_x), serial_comm());
       }
     }
 
@@ -561,7 +565,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
     print(x_tmp, "Xcols");
 
     // 3E UPDATE
-    trace("At", At_start, "size:", At_size);
+    trace("At", At_start, "size:", at_localsize);
 
     trace("Vrows");
     for (const auto& tile_v_fut : v)
@@ -1143,8 +1147,9 @@ void compute_x(MatrixT<T>& x, MatrixT<T>& x_tmp, const LocalTileIndex at_start, 
     for (SizeType j = at_start.col(); j < limit; ++j) {
       const LocalTileIndex index_at{i, j};
 
-      const GlobalTileIndex index_a =
-          dist.globalTileIndex(index_at);  // TODO possible FIXME? I would add at_start
+      // TODO possible FIXME? I would add at_start
+      const GlobalTileIndex index_a = dist.globalTileIndex(index_at);
+
       const bool is_diagonal_tile = (index_a.row() == index_a.col());
 
       if (is_diagonal_tile) {
@@ -1230,14 +1235,14 @@ void compute_w2(MatrixT<T>& w2, ConstMatrixT<T>& w, ConstMatrixT<T>& x,
     trace("GEMM W2");
 
     // clang-format off
-      blas::gemm(blas::Layout::ColMajor,
-          blas::Op::ConjTrans, blas::Op::NoTrans,
-          tile_w2.size().rows(), tile_w2.size().cols(), tile_w.size().cols(),
-          static_cast<T>(1),
-          tile_w.ptr(), tile_w.ld(),
-          tile_x.ptr(), tile_x.ld(),
-          beta,
-          tile_w2.ptr(), tile_w2.ld());
+    blas::gemm(blas::Layout::ColMajor,
+        blas::Op::ConjTrans, blas::Op::NoTrans,
+        tile_w2.size().rows(), tile_w2.size().cols(), tile_w.size().cols(),
+        static_cast<T>(1),
+        tile_w.ptr(), tile_w.ld(),
+        tile_x.ptr(), tile_x.ld(),
+        beta,
+        tile_w2.ptr(), tile_w2.ld());
     // clang-format on
   });
 
@@ -1315,14 +1320,14 @@ void update_a(const LocalTileIndex at_start, MatrixT<T>& a, ConstMatrixT<T>& x, 
     print_tile(tile_at);
 
     // clang-format off
-        blas::her2k(blas::Layout::ColMajor,
-            blas::Uplo::Lower, blas::Op::NoTrans,
-            tile_at.size().rows(), tile_v.size().cols(),
-            static_cast<T>(-1), // TODO T must be a signed type
-            tile_v.ptr(), tile_v.ld(),
-            tile_x.ptr(), tile_x.ld(),
-            static_cast<T>(1),
-            tile_at.ptr(), tile_at.ld());
+    blas::her2k(blas::Layout::ColMajor,
+        blas::Uplo::Lower, blas::Op::NoTrans,
+        tile_at.size().rows(), tile_v.size().cols(),
+        static_cast<T>(-1), // TODO T must be a signed type
+        tile_v.ptr(), tile_v.ld(),
+        tile_x.ptr(), tile_x.ld(),
+        static_cast<T>(1),
+        tile_at.ptr(), tile_at.ld());
     // clang-format on
 
     std::cout << "tile_at*\n";
@@ -1342,14 +1347,14 @@ void update_a(const LocalTileIndex at_start, MatrixT<T>& a, ConstMatrixT<T>& x, 
     print_tile(tile_at);
 
     // clang-format off
-        blas::gemm(blas::Layout::ColMajor,
-            blas::Op::NoTrans, blas::Op::ConjTrans,
-            tile_at.size().rows(), tile_at.size().cols(), tile_x.size().rows(),
-            static_cast<T>(-1), // TODO T must be a signed type
-            tile_x.ptr(), tile_x.ld(),
-            tile_v.ptr(), tile_v.ld(),
-            static_cast<T>(1),
-            tile_at.ptr(), tile_at.ld());
+    blas::gemm(blas::Layout::ColMajor,
+        blas::Op::NoTrans, blas::Op::ConjTrans,
+        tile_at.size().rows(), tile_at.size().cols(), tile_x.size().rows(),
+        static_cast<T>(-1), // TODO T must be a signed type
+        tile_x.ptr(), tile_x.ld(),
+        tile_v.ptr(), tile_v.ld(),
+        static_cast<T>(1),
+        tile_at.ptr(), tile_at.ld());
     // clang-format on
 
     std::cout << "tile_at*\n";
@@ -1369,14 +1374,14 @@ void update_a(const LocalTileIndex at_start, MatrixT<T>& a, ConstMatrixT<T>& x, 
     print_tile(tile_at);
 
     // clang-format off
-        blas::gemm(blas::Layout::ColMajor,
-            blas::Op::NoTrans, blas::Op::ConjTrans,
-            tile_at.size().rows(), tile_at.size().cols(), tile_x.size().rows(),
-            static_cast<T>(-1), // TODO check this + FIXME T must be a signed type
-            tile_v.ptr(), tile_v.ld(),
-            tile_x.ptr(), tile_x.ld(),
-            static_cast<T>(1),
-            tile_at.ptr(), tile_at.ld());
+    blas::gemm(blas::Layout::ColMajor,
+        blas::Op::NoTrans, blas::Op::ConjTrans,
+        tile_at.size().rows(), tile_at.size().cols(), tile_x.size().rows(),
+        static_cast<T>(-1), // TODO check this + FIXME T must be a signed type
+        tile_v.ptr(), tile_v.ld(),
+        tile_x.ptr(), tile_x.ld(),
+        static_cast<T>(1),
+        tile_at.ptr(), tile_at.ld());
     // clang-format on
 
     std::cout << "tile_at*\n";
