@@ -19,3 +19,7 @@ if (DLAF_WITH_TEST)
   target_link_libraries(miniapp_triangular_solver PRIVATE DLAF_test)
   target_add_warnings(miniapp_triangular_solver)
 endif()
+
+add_executable(miniapp_reduction_to_band miniapp_reduction_to_band.cpp)
+target_link_libraries(miniapp_reduction_to_band PRIVATE DLAF)
+target_add_warnings(miniapp_reduction_to_band)
