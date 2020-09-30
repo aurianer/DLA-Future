@@ -946,7 +946,7 @@ void compute_t_factor(MatrixT<Type>& t, ConstMatrixT<Type>& a, const LocalTileIn
 
           // compute first component with implicit one
           for (const auto& index_el_t : iterate_range2d(t_start, t_size)) {
-            const auto index_el_va = common::internal::transposed(index_el_t);
+            const auto index_el_va = common::transposed(index_el_t);
             tile_t(index_el_t) = -tau * tile_v(index_el_va);
 
             trace("tile_t", tile_t(index_el_t), -tau, tile_v(index_el_va));
