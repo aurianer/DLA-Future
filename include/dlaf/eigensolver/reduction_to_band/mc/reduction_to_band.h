@@ -352,7 +352,8 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
       else {
         LocalTileIndex index_tile_v{0, index_v_loc};
 
-        hpx::dataflow(broadcast_recv(col_wise{}, owner_rank_row), mat_v_tmp(index_tile_v), serial_comm());
+        hpx::dataflow(broadcast_recv(col_wise{}, owner_rank_row), mat_v_tmp(index_tile_v),
+                      serial_comm());
 
         v_tmp[index_v_loc] = mat_v_tmp.read(index_tile_v);
       }
@@ -552,7 +553,8 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
         hpx::dataflow(broadcast_send(col_wise{}), x(LocalTileIndex{index_x_row_loc, 0}), serial_comm());
       }
       else {
-        hpx::dataflow(broadcast_recv(col_wise{}, rank_owner), x_tmp(LocalTileIndex{0, index_x_loc}), serial_comm());
+        hpx::dataflow(broadcast_recv(col_wise{}, rank_owner), x_tmp(LocalTileIndex{0, index_x_loc}),
+                      serial_comm());
       }
     }
 
