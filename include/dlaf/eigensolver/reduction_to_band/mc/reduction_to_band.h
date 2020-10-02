@@ -852,11 +852,11 @@ void update_trailing_panel(MatrixT<T>& a, const LocalTileIndex ai_start_loc,
         const SizeType first_element = has_first_component ? index_el_x0.row() : 0;
 
         // clang-format off
-            TileElementIndex        pt_start{first_element, index_el_x0.col() + 1};
-            TileElementSize         pt_size {tile_a.size().rows() - pt_start.row(), tile_a.size().cols() - pt_start.col()};
+        TileElementIndex        pt_start{first_element, index_el_x0.col() + 1};
+        TileElementSize         pt_size {tile_a.size().rows() - pt_start.row(), tile_a.size().cols() - pt_start.col()};
 
-            TileElementIndex        v_start {first_element, index_el_x0.col()};
-            const TileElementIndex  w_start {0, index_el_x0.col() + 1};
+        TileElementIndex        v_start {first_element, index_el_x0.col()};
+        const TileElementIndex  w_start {0, index_el_x0.col() + 1};
         // clang-format on
 
         trace("UPDATE TRAILING PANEL, tau =", tau);
@@ -870,13 +870,13 @@ void update_trailing_panel(MatrixT<T>& a, const LocalTileIndex ai_start_loc,
 
           // Pt = Pt - tau * v[0] * w*
           // clang-format off
-              const T fake_v = 1;
-              blas::ger(blas::Layout::ColMajor,
-                  1, pt_size.cols(),
-                  -tau,
-                  &fake_v, 1,
-                  tile_w.ptr(w_start), tile_w.ld(),
-                  tile_a.ptr(pt_start), tile_a.ld());
+          const T fake_v = 1;
+          blas::ger(blas::Layout::ColMajor,
+              1, pt_size.cols(),
+              -tau,
+              &fake_v, 1,
+              tile_w.ptr(w_start), tile_w.ld(),
+              tile_a.ptr(pt_start), tile_a.ld());
           // clang-format on
 
           pt_start = pt_start + offset;
@@ -886,12 +886,12 @@ void update_trailing_panel(MatrixT<T>& a, const LocalTileIndex ai_start_loc,
 
         // Pt = Pt - tau * v * w*
         // clang-format off
-            blas::ger(blas::Layout::ColMajor,
-                pt_size.rows(), pt_size.cols(),
-                -tau,
-                tile_a.ptr(v_start), 1,
-                tile_w.ptr(w_start), tile_w.ld(),
-                tile_a.ptr(pt_start), tile_a.ld());
+        blas::ger(blas::Layout::ColMajor,
+            pt_size.rows(), pt_size.cols(),
+            -tau,
+            tile_a.ptr(v_start), 1,
+            tile_w.ptr(w_start), tile_w.ld(),
+            tile_a.ptr(pt_start), tile_a.ld());
         // clang-format on
 
         trace("Pt");
