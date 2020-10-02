@@ -129,6 +129,84 @@ auto broadcast_recv = [](auto&& row_or_col, const comm::IndexT_MPI rank) {
 };
 
 template <class T>
+struct VirtualPanelT {
+  MatrixT<T>& col;
+  MatrixT<T>& row;
+  LocalTileSize offset;
+};
+
+template <class T>
+auto create_workspace_with(MatrixT<T>& col_panel, MatrixT<T>& row_panel, const LocalTileSize offset) {
+  return VirtualPanelT<T>{col_panel, row_panel, offset};
+}
+
+// Describes an index that is distributed over a workspace made of a column and a row panel
+// Correctly addressing a specific tile, requires:
+// - the local index
+// - which of the two panel the previous index is valid into
+// Moreover, an additional information about which rank is the source of the tile.
+// TODO Describe better the communication pattern (row bcast + col bcast)
+struct WorkspaceTileIndex {
+  comm::IndexT_MPI row_source;
+  Coord where;
+  LocalTileIndex index;
+};
+
+// TODO index_row has to be global, and it's not constrained
+WorkspaceTileIndex workspace_index(SizeType index_row, const matrix::Distribution& dist,
+                                   LocalTileSize offset) {
+  const auto& rank = dist.rankIndex();
+
+  const auto owner_rank_row = dist.rankGlobalTile<Coord::Row>(index_row);
+
+  const bool is_owner = owner_rank_row == rank.row();
+  if (is_owner)
+    return {owner_rank_row,
+            Coord::Col,
+            {dist.template localTileFromGlobalTile<Coord::Row>(index_row) - offset.rows(), 0}};
+  else
+    return {owner_rank_row,
+            Coord::Row,
+            {0, dist.template localTileFromGlobalTile<Coord::Col>(index_row) - offset.cols()}};
+}
+
+// helper function that gives direct access to the tile at given index in the column workspace
+template <class T>
+FutureTile<T> tile_from(const VirtualPanelT<T>& ws, const LocalTileIndex& index) {
+  return ws.col(index);
+}
+
+// TODO virutal_panel const
+// helper function that gives direct access to the tile at given index in the column workspace (read-only)
+template <class T>
+FutureConstTile<T> read_tile_from(const VirtualPanelT<T>& ws, const LocalTileIndex& index) {
+  return ws.col.read(index);
+}
+
+// TODO virutal_panel const
+// retrieve the tile at the given workspace index (read-only)
+template <class T>
+FutureConstTile<T> read_tile_from(const VirtualPanelT<T>& ws, const WorkspaceTileIndex& ws_index) {
+  switch (ws_index.where) {
+    case Coord::Col:
+      return ws.col.read(ws_index.index);
+    case Coord::Row:
+      return ws.row.read(ws_index.index);
+  }
+}
+
+// retrieve the tile at the given workspace index
+template <class T>
+FutureTile<T> tile_from(const VirtualPanelT<T>& ws, const WorkspaceTileIndex& ws_index) {
+  switch (ws_index.where) {
+    case Coord::Col:
+      return ws.col(ws_index.index);
+    case Coord::Row:
+      return ws.row(ws_index.index);
+  }
+}
+
+template <class T>
 hpx::shared_future<T> compute_reflector(MatrixT<T>& a, const LocalTileIndex ai_start_loc,
                                         const LocalTileSize ai_localsize, const GlobalTileIndex ai_start,
                                         const TileElementIndex index_el_x0,
@@ -152,9 +230,9 @@ void compute_w(MatrixT<T>& w, FutureConstPanel<T> v, ConstMatrixT<T>& t);
 
 // TODO document that it stores in Xcols just the ones for which he is not on the right row,
 // otherwise it directly compute also gemm2 inside Xrows
+// TODO workspace_w should be const
 template <class T>
-void compute_x(MatrixT<T>& x, MatrixT<T>& x_tmp, const LocalTileSize at_offset, ConstMatrixT<T>& a,
-               ConstMatrixT<T>& w, ConstMatrixT<T>& w_tmp);
+void compute_x(const VirtualPanelT<T>& workspace_x, ConstMatrixT<T>& a, const VirtualPanelT<T>& w_tmp);
 
 template <class T>
 void compute_w2(MatrixT<T>& w2, ConstMatrixT<T>& w, ConstMatrixT<T>& x,
@@ -163,8 +241,9 @@ void compute_w2(MatrixT<T>& w2, ConstMatrixT<T>& w, ConstMatrixT<T>& x,
 template <class T>
 void update_x(MatrixT<T>& x, ConstMatrixT<T>& w2, FutureConstPanel<T> v);
 
+// TODO workspace_x should be const
 template <class T>
-void update_a(const LocalTileIndex at_start, MatrixT<T>& a, ConstMatrixT<T>& x, ConstMatrixT<T>& x_tmp,
+void update_a(const LocalTileIndex at_start, MatrixT<T>& a, const VirtualPanelT<T>& workspace_x,
               FutureConstPanel<T> v, FutureConstPanel<T> v_tmp);
 }
 
@@ -346,24 +425,23 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
 
     // TODO Avoid useless communication
     for (const auto& index_v : iterate_range2d(dist_row.localNrTiles())) {
-      const SizeType local_col_v_wrt_a = (index_v + at_offset).col();
-      const auto col_v_wrt_a = dist.template globalTileFromLocalTile<Coord::Col>(local_col_v_wrt_a);
+      const auto index_v_row =
+          dist.template globalTileFromLocalTile<Coord::Col>((index_v + at_offset).col());
 
-      // here the matching between transposed column and row is done,
-      // in addition to exploiting that the entire row owns the same information
-      const IndexT_MPI row_rank_owner = dist.template rankGlobalTile<Coord::Row>(col_v_wrt_a);
+      const auto ws_index = workspace_index(index_v_row, dist, at_offset);
 
       FutureConstTile<Type> tile_v;
 
-      if (row_rank_owner == rank.row()) {
-        const SizeType row_v_owner =
-            dist.template localTileFromGlobalTile<Coord::Row>(col_v_wrt_a) - at_offset.rows();
-        tile_v = v[row_v_owner];
+      if (ws_index.row_source == rank.row()) {
+        tile_v = v[ws_index.index.row()];
 
         hpx::dataflow(broadcast_send(col_wise{}), tile_v, serial_comm());
       }
       else {
-        hpx::dataflow(broadcast_recv(col_wise{}, row_rank_owner), mat_v_tmp(index_v), serial_comm());
+        DLAF_ASSERT_HEAVY(ws_index.index == index_v, index_v, ws_index.index);
+
+        hpx::dataflow(broadcast_recv(col_wise{}, ws_index.row_source), mat_v_tmp(index_v),
+                      serial_comm());
 
         tile_v = mat_v_tmp.read(index_v);
       }
@@ -421,6 +499,8 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
       }
     }
 
+    auto workspace_w = create_workspace_with(w, w_tmp, at_offset);
+
     print(w, "W");
     print(w_tmp, "W_conj");
 
@@ -434,12 +514,14 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
     MatrixT<Type> x_tmp({nb, (at_localsize.cols() != 0 ? at_localsize.cols() : 1) * nb},
                         dist.blockSize());
 
+    auto workspace_x = create_workspace_with(x, x_tmp, at_offset);
+
     // TODO maybe it may be enough doing it if (At_size.isEmpty())
     set_to_zero(x);
     set_to_zero(x_tmp);
 
     // HEMM X = At . W
-    compute_x(x, x_tmp, at_offset, mat_a, w, w_tmp);
+    compute_x(workspace_x, mat_a, workspace_w);
 
     print(x, "Xpre-rows");
     print(x_tmp, "Xpre-cols");
@@ -454,26 +536,22 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
       const SizeType index_x_row =
           dist.template globalTileFromLocalTile<Coord::Col>((index_x + at_offset).col());
 
-      const IndexT_MPI rank_owner_row = dist.template rankGlobalTile<Coord::Row>(index_x_row);
+      const auto ws_index = workspace_index(index_x_row, dist, workspace_x.offset);
 
-      if (rank_owner_row == rank.row()) {
+      if (ws_index.row_source == rank.row()) {
         auto reduce_x_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
           auto comm_grid = comm_wrapper();
 
-          trace("reducing root X col-wise", rank_owner_row, index_x_row);
+          trace("reducing root X col-wise", rank.row(), index_x_row);
           print_tile(tile_x);
 
-          reduce(rank_owner_row, comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x),
-                 make_data(tile_x));
+          reduce(rank.row(), comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x), make_data(tile_x));
 
           trace("REDUCED COL", index_x_row);
           print_tile(tile_x);
         });
 
-        const SizeType index_x_row_loc =
-            dist.template localTileFromGlobalTile<Coord::Row>(index_x_row) - at_offset.rows();
-
-        FutureTile<Type> tile_x = x(LocalTileIndex{index_x_row_loc, 0});
+        FutureTile<Type> tile_x = x(ws_index.index);
 
         hpx::dataflow(reduce_x_func, std::move(tile_x), serial_comm());
       }
@@ -485,11 +563,11 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
           print_tile(tile_x_conj);
 
           Type fake;
-          reduce(rank_owner_row, comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x_conj),
+          reduce(ws_index.row_source, comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x_conj),
                  make_data(&fake, 0));
         });
 
-        FutureConstTile<Type> tile_x = x_tmp.read(index_x);
+        FutureConstTile<Type> tile_x = x_tmp.read(ws_index.index);
 
         hpx::dataflow(reduce_x_func, std::move(tile_x), serial_comm());
       }
@@ -577,7 +655,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
       print_tile(tile_vcols_fut.get());
 
     // HER2K At = At - X . V* + V . X*
-    update_a(At_start, mat_a, x, x_tmp, v, v_tmp);
+    update_a(At_start, mat_a, workspace_x, v, v_tmp);
   }
 }
 
@@ -1057,11 +1135,8 @@ void compute_w(MatrixT<T>& w, FutureConstPanel<T> v, ConstMatrixT<T>& t) {
   }
 }
 
-// TODO document that it stores in Xcols just the ones for which he is not on the right row,
-// otherwise it directly compute also gemm2 inside Xrows
 template <class T>
-void compute_x(MatrixT<T>& x, MatrixT<T>& x_tmp, const LocalTileSize at_offset, ConstMatrixT<T>& a,
-               ConstMatrixT<T>& w, ConstMatrixT<T>& w_tmp) {
+void compute_x(VirtualPanelT<T>& workspace_x, ConstMatrixT<T>& a, const VirtualPanelT<T>& workspace_w) {
   using hpx::util::unwrapping;
 
   auto hemm_func = unwrapping([](auto&& tile_x, const auto& tile_a, const auto& tile_w) -> void {
@@ -1140,27 +1215,27 @@ void compute_x(MatrixT<T>& x, MatrixT<T>& x_tmp, const LocalTileSize at_offset, 
   });
 
   const auto dist = a.distribution();
-  const comm::Index2D rank = dist.rankIndex();
 
-  for (SizeType i = at_offset.rows(); i < dist.localNrTiles().rows(); ++i) {
+  const auto at_start = workspace_x.offset;
+  for (SizeType i = at_start.rows(); i < dist.localNrTiles().rows(); ++i) {
     const comm::IndexT_MPI limit = dist.template nextLocalTileFromGlobalTile<Coord::Col>(
         dist.template globalTileFromLocalTile<Coord::Row>(i) + 1);
-    for (SizeType j = at_offset.cols(); j < limit; ++j) {
-      const LocalTileIndex index_at_wrt_a{i, j};
+    for (SizeType j = at_start.cols(); j < limit; ++j) {
+      const LocalTileIndex index_at{i, j};
 
       // TODO possible FIXME? I would add at_start
-      const GlobalTileIndex index_a = dist.globalTileIndex(index_at_wrt_a);
+      const GlobalTileIndex index_a = dist.globalTileIndex(index_at);
 
       const bool is_diagonal_tile = (index_a.row() == index_a.col());
 
       if (is_diagonal_tile) {
-        const LocalTileIndex index_x{index_at_wrt_a.row() - at_offset.rows(), 0};
-        const LocalTileIndex index_w{index_at_wrt_a.row() - at_offset.rows(), 0};
+        const LocalTileIndex index_x{index_at.row() - at_start.rows(), 0};
+        const LocalTileIndex index_w{index_at.row() - at_start.rows(), 0};
 
         // clang-format off
-        FutureTile<T>       tile_x = x(index_x);
-        FutureConstTile<T>  tile_a = a.read(index_at_wrt_a);
-        FutureConstTile<T>  tile_w = w.read(index_w);
+        FutureTile<T>       tile_x = tile_from(workspace_x, index_x);
+        FutureConstTile<T>  tile_a = a.read(index_at);
+        FutureConstTile<T>  tile_w = read_tile_from(workspace_w, index_w);
         // clang-format on
 
         hpx::dataflow(hemm_func, std::move(tile_x), std::move(tile_a), std::move(tile_w));
@@ -1168,55 +1243,26 @@ void compute_x(MatrixT<T>& x, MatrixT<T>& x_tmp, const LocalTileSize at_offset, 
       else {
         // A  . W
         {
-          const LocalTileIndex index_x{index_at_wrt_a.row() - at_offset.rows(), 0};
+          const LocalTileIndex index_x{index_at.row() - at_start.rows(), 0};
 
           // clang-format off
-          FutureTile<T>       tile_x = x(index_x);
-          FutureConstTile<T>  tile_a = a.read(index_at_wrt_a);
-          FutureConstTile<T>  tile_w;
+          FutureTile<T>       tile_x = tile_from(workspace_x, index_x);
+          FutureConstTile<T>  tile_a = a.read(index_at);
+          FutureConstTile<T>  tile_w = read_tile_from(workspace_w, workspace_index(index_a.col(), dist, workspace_w.offset));
           // clang-format on
-
-          const bool own_w = rank.row() == dist.template rankGlobalTile<Coord::Row>(index_a.col());
-          if (own_w) {
-            const SizeType index_a_row =
-                dist.template localTileFromGlobalTile<Coord::Row>(index_a.col());
-            const LocalTileIndex index_w{index_a_row - at_offset.rows(), 0};
-
-            tile_w = w.read(index_w);
-          }
-          else {
-            const SizeType index_tmp = dist.template localTileFromGlobalTile<Coord::Col>(index_a.col());
-            const LocalTileIndex index_tile_w{0, index_tmp - at_offset.cols()};
-            DLAF_ASSERT(index_tmp == index_at_wrt_a.col(),
-                        "");  // TODO if this is true, index_tmp can be replaced
-
-            tile_w = w_tmp.read(index_tile_w);
-          }
 
           hpx::dataflow(gemm_a_func, std::move(tile_x), std::move(tile_a), std::move(tile_w));
         }
 
         // A* . W
         {
-          const LocalTileIndex index_w{index_at_wrt_a.row() - at_offset.rows(), 0};
+          const LocalTileIndex index_w{index_at.row() - at_start.rows(), 0};
 
           // clang-format off
-          FutureConstTile<T>  tile_a = a.read(index_at_wrt_a);
-          FutureConstTile<T>  tile_w = w.read(index_w);
-          FutureTile<T>       tile_x_h;
+          FutureConstTile<T>  tile_a = a.read(index_at);
+          FutureConstTile<T>  tile_w = read_tile_from(workspace_w, index_w);
+          FutureTile<T>       tile_x_h = tile_from(workspace_x, workspace_index(index_a.col(), dist, workspace_x.offset));
           // clang-format on
-
-          // if it will be reduced on itself, just add it now
-          const bool own_x = rank.row() == dist.template rankGlobalTile<Coord::Row>(index_a.col());
-          if (own_x) {
-            const SizeType index_tmp = dist.template localTileFromGlobalTile<Coord::Row>(index_a.col());
-            const LocalTileIndex index_x_h{index_tmp - at_offset.rows(), 0};
-            tile_x_h = x(index_x_h);
-          }
-          else {
-            const LocalTileIndex index_x_h{0, index_at_wrt_a.col() - at_offset.cols()};
-            tile_x_h = x_tmp(index_x_h);
-          }
 
           hpx::dataflow(gemm_b_func, std::move(tile_x_h), std::move(tile_a), std::move(tile_w));
         }
@@ -1304,7 +1350,7 @@ void update_x(MatrixT<T>& x, ConstMatrixT<T>& w2, FutureConstPanel<T> v) {
 }
 
 template <class T>
-void update_a(const LocalTileIndex at_start, MatrixT<T>& a, ConstMatrixT<T>& x, ConstMatrixT<T>& x_tmp,
+void update_a(const LocalTileIndex at_start, MatrixT<T>& a, const VirtualPanelT<T>& workspace_x,
               FutureConstPanel<T> v, FutureConstPanel<T> v_tmp) {
   using hpx::util::unwrapping;
 
@@ -1409,7 +1455,7 @@ void update_a(const LocalTileIndex at_start, MatrixT<T>& a, ConstMatrixT<T>& x, 
         // clang-format off
         FutureTile<T>       tile_a = a(index_at);
         FutureConstTile<T>  tile_v = v[index_v];
-        FutureConstTile<T>  tile_x = x.read(index_x);
+        FutureConstTile<T>  tile_x = read_tile_from(workspace_x, index_x);
         // clang-format on
 
         hpx::dataflow(her2k_func, std::move(tile_a), std::move(tile_v), std::move(tile_x));
@@ -1421,7 +1467,7 @@ void update_a(const LocalTileIndex at_start, MatrixT<T>& a, ConstMatrixT<T>& x, 
 
           // clang-format off
           FutureTile<T>       tile_a = a(index_at);
-          FutureConstTile<T>  tile_x = x.read(index_x);
+          FutureConstTile<T>  tile_x = read_tile_from(workspace_x, index_x);
           FutureConstTile<T>  tile_v;
           // clang-format on
 
@@ -1445,18 +1491,8 @@ void update_a(const LocalTileIndex at_start, MatrixT<T>& a, ConstMatrixT<T>& x, 
           // clang-format off
           FutureTile<T>       tile_a = a(index_at);
           FutureConstTile<T>  tile_v = v[index_tile_v];
-          FutureConstTile<T>  tile_x;
+          FutureConstTile<T>  tile_x = read_tile_from(workspace_x, workspace_index(index_a.col(), dist, workspace_x.offset));
           // clang-format on
-
-          const bool own_x = rank.row() == dist.template rankGlobalTile<Coord::Row>(index_a.col());
-          if (own_x) {
-            const auto index_tmp =
-                dist.template localTileFromGlobalTile<Coord::Row>(index_a.col()) - at_start.row();
-            tile_x = x.read(LocalTileIndex{index_tmp, 0});
-          }
-          else {
-            tile_x = x_tmp.read(LocalTileIndex{0, index_at.col() - at_start.col()});
-          }
 
           hpx::dataflow(gemm_b_func, tile_a, tile_v, tile_x);
         }
