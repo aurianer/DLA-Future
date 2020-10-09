@@ -55,7 +55,7 @@ template <class Type>
 using MemViewT = memory::MemoryView<Type, Device::CPU>;
 
 template <class T>
-void print(ConstMatrixT<T>& matrix, std::string prefix = "");
+void print(ConstMatrixT<T>& matrix, std::string prefix, const bool force_out = false);
 template <class T>
 void print_tile(const ConstTileT<T>& tile);
 
@@ -288,7 +288,7 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
       else
         hpx::dataflow(broadcast_recv(col_wise{}, rank_v0.row()), t(LocalTileIndex{0, 0}), serial_comm());
 
-      print(t, std::string("T") + std::to_string(j_panel));
+      print(t, std::string("T") + std::to_string(j_panel), true);
     }
 
     // Here two things are being done:
@@ -1311,13 +1311,13 @@ void update_a(const LocalTileIndex at_start, MatrixT<T>& a, ConstMatrixT<T>& x, 
   auto her2k_func = unwrapping([](auto&& tile_at, const auto& tile_v, const auto& tile_x) -> void {
     trace("HER2K");
 
-    std::cout << "tile_v\n";
+    trace("tile_v");
     print_tile(tile_v);
 
-    std::cout << "tile_x\n";
+    trace("tile_x");
     print_tile(tile_x);
 
-    std::cout << "tile_at\n";
+    trace("tile_at");
     print_tile(tile_at);
 
     // clang-format off
@@ -1331,20 +1331,20 @@ void update_a(const LocalTileIndex at_start, MatrixT<T>& a, ConstMatrixT<T>& x, 
         tile_at.ptr(), tile_at.ld());
     // clang-format on
 
-    std::cout << "tile_at*\n";
+    trace("tile_at*");
     print_tile(tile_at);
   });
 
   auto gemm_a_func = unwrapping([](auto&& tile_at, const auto& tile_x, const auto& tile_v) -> void {
     trace("DOUBLE GEMM-1");
 
-    std::cout << "tile_x\n";
+    trace("tile_x");
     print_tile(tile_x);
 
-    std::cout << "tile_v\n";
+    trace("tile_v");
     print_tile(tile_v);
 
-    std::cout << "tile_at\n";
+    trace("tile_at");
     print_tile(tile_at);
 
     // clang-format off
@@ -1358,20 +1358,20 @@ void update_a(const LocalTileIndex at_start, MatrixT<T>& a, ConstMatrixT<T>& x, 
         tile_at.ptr(), tile_at.ld());
     // clang-format on
 
-    std::cout << "tile_at*\n";
+    trace("tile_at*");
     print_tile(tile_at);
   });
 
   auto gemm_b_func = unwrapping([](auto&& tile_at, const auto& tile_v, const auto& tile_x) -> void {
     trace("DOUBLE GEMM-2");
 
-    std::cout << "tile_v\n";
+    trace("tile_v");
     print_tile(tile_v);
 
-    std::cout << "tile_x\n";
+    trace("tile_x");
     print_tile(tile_x);
 
-    std::cout << "tile_at\n";
+    trace("tile_at");
     print_tile(tile_at);
 
     // clang-format off
@@ -1385,7 +1385,7 @@ void update_a(const LocalTileIndex at_start, MatrixT<T>& a, ConstMatrixT<T>& x, 
         tile_at.ptr(), tile_at.ld());
     // clang-format on
 
-    std::cout << "tile_at*\n";
+    trace("tile_at*");
     print_tile(tile_at);
   });
 
@@ -1466,7 +1466,7 @@ void update_a(const LocalTileIndex at_start, MatrixT<T>& a, ConstMatrixT<T>& x, 
 }
 
 template <class Type>
-void print(ConstMatrixT<Type>& matrix, std::string prefix) {
+void print(ConstMatrixT<Type>& matrix, std::string prefix, const bool force_out) {
   using common::iterate_range2d;
 
   const auto& distribution = matrix.distribution();
@@ -1489,7 +1489,10 @@ void print(ConstMatrixT<Type>& matrix, std::string prefix) {
     }
   }
 
-  trace(ss.str());
+  if (force_out)
+    std::cout << ss.str() << std::endl;
+  else
+    trace(ss.str());
 }
 
 template <class Type>
