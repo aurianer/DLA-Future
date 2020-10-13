@@ -8,6 +8,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 //
 
+#include "dlaf/common/index2d.h"
 #include "dlaf/eigensolver/mc.h"
 
 #include <gtest/gtest.h>
@@ -17,10 +18,13 @@
 #include "dlaf/communication/sync/broadcast.h"
 #include "dlaf/common/pipeline.h"
 #include "dlaf/matrix.h"
+#include "dlaf/memory/memory_view.h"
+#include "dlaf/types.h"
 #include "dlaf/util_matrix.h"
 #include "dlaf/matrix/copy.h"
 #include "dlaf/communication/functions_sync.h"
 
+#include "dlaf_test/matrix/matrix_local.h"
 #include "dlaf_test/comm_grids/grids_6_ranks.h"
 #include "dlaf_test/matrix/util_matrix.h"
 #include "dlaf_test/matrix/util_tile.h"
@@ -33,11 +37,14 @@ using namespace dlaf::matrix::test;
 using namespace dlaf_test;
 using namespace testing;
 
+template <class T>
+using MatrixLocal = dlaf::test::MatrixLocal<T>;
+
 ::testing::Environment* const comm_grids_env =
     ::testing::AddGlobalTestEnvironment(new CommunicatorGrid6RanksEnvironment);
 
 template <typename Type>
-class CholeskyDistributedTest : public ::testing::Test {
+class ReductionToBandTest : public ::testing::Test {
 public:
   const std::vector<CommunicatorGrid>& commGrids() {
     return comm_grids;
@@ -45,7 +52,7 @@ public:
 };
 
 using NonComplexTypes = ::testing::Types<double, float>;
-TYPED_TEST_SUITE(CholeskyDistributedTest, NonComplexTypes); //MatrixElementTypes);
+TYPED_TEST_SUITE(ReductionToBandTest, NonComplexTypes); //MatrixElementTypes);
 
 const std::vector<LocalElementSize> square_sizes{{8, 8}};
 const std::vector<TileElementSize> square_block_sizes{{2, 2}};
@@ -62,6 +69,7 @@ void print(Matrix<const T, Device::CPU>& matrix, std::string prefix) {
   ss << prefix << rank;
   prefix = ss.str();
 
+  ss.str("");
   ss.clear();
   ss << prefix << " = np.zeros((" << distribution.size() << "))" << std::endl;
 
@@ -83,91 +91,114 @@ void print(Matrix<const T, Device::CPU>& matrix, std::string prefix) {
   std::cout << ss.str() << std::endl;
 }
 
-template <class T, Device device>
-Matrix<T, device> makeLocal(Matrix<const T, device>& matrix) {
-  const auto& dist = matrix.distribution();
-  return {{dist.size().rows(), dist.size().cols()}, dist.blockSize()};
+template <class T>
+MatrixLocal<T> createLocalMatrix(SizeType rows, SizeType cols, TileElementSize blocksize) {
+  return {{rows, cols}, std::move(blocksize)};
 }
 
-template <class T, Device device>
-Matrix<T, device> makeLocalQ(Matrix<const T, device>& matrix, const SizeType band_size) {
-  const auto& dist = matrix.distribution();
-
-  const SizeType height = dist.size().rows() - band_size;
-
-  return {{
-    height,
-    std::min(height, dist.size().cols())
-  }, dist.blockSize()};
+template <class T>
+auto makeLocal(const Matrix<const T, Device::CPU>& matrix) {
+  const auto from_size = matrix.size();
+  return createLocalMatrix<T>(from_size.rows(), from_size.cols(), matrix.distribution().blockSize());
 }
 
 template <class T, Device device> // TODO add tile_selector predicate
-void all_gather(Matrix<const T, device>& source, Matrix<T, device>& dest,
-    common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
+void all_gather(Matrix<const T, device>& source, MatrixLocal<T>& dest, comm::CommunicatorGrid comm_grid) {
   const auto& dist_source = source.distribution();
   const auto rank = dist_source.rankIndex();
 
-  for (const auto& ij_tile : iterate_range2d(dest.distribution().nrTiles())) {
+  for (const auto& ij_tile : iterate_range2d(dist_source.nrTiles())) {
     const auto owner = dist_source.rankGlobalTile(ij_tile);
 
-    auto&& dest_tile = dest(ij_tile);
+    auto& dest_tile = dest(ij_tile);
 
-    if (owner == rank)
-      hpx::dataflow(hpx::util::unwrapping([](auto&& source, auto&& dest, auto&& comm_wrapper) {
-        comm::sync::broadcast::send(
-          comm_wrapper().fullCommunicator(),
-          source);
-        copy(source, dest);
-      }), source.read(ij_tile), dest_tile, serial_comm());
-    else
-      hpx::dataflow(hpx::util::unwrapping([=](auto&& dest, auto&& comm_wrapper) {
-        auto&& comm = comm_wrapper();
-        comm::sync::broadcast::receive_from(
-          comm.rankFullCommunicator(owner),
-          comm.fullCommunicator(),
-          dest);
-      }), dest_tile, serial_comm());
+    if (owner == rank) {
+      const auto& source_tile = source.read(ij_tile).get();
+      comm::sync::broadcast::send(
+          comm_grid.fullCommunicator(),
+          source_tile);
+      copy(source_tile, dest_tile);
+    }
+    else {
+      comm::sync::broadcast::receive_from(
+          comm_grid.rankFullCommunicator(owner),
+          comm_grid.fullCommunicator(),
+          dest_tile);
+    }
   }
 }
 
-template <class T, Device device>
-void set_out_of_band(Matrix<T, device>& matrix, const SizeType& band_size) {
+template <class T>
+void mirror_on_diag(const Tile<T, Device::CPU>& tile) {
+  DLAF_ASSERT(square_size(tile), "");
+
+  for (SizeType j = 0; j < tile.size().cols(); j++)
+    for (SizeType i = j; i < tile.size().rows(); ++i)
+      tile({j, i}) = tile({i, j});
+}
+
+template <class T>
+void copy_transposed(const Tile<const T, Device::CPU>& from, const Tile<T, Device::CPU>& to) {
+  DLAF_ASSERT(square_size(from), "");
+  DLAF_ASSERT(equal_size(from, to), from.size(), to.size());
+
+  for (SizeType j = 0; j < from.size().cols(); j++)
+    for (SizeType i = 0; i < from.size().rows(); ++i)
+      to({j, i}) = from({i, j});
+}
+
+// band_size in elements
+template <class T>
+void setup_sym_band(MatrixLocal<T>& matrix, const SizeType& band_size) {
   DLAF_ASSERT(band_size == matrix.blockSize().rows(), "not yet implemented", band_size, matrix.blockSize().rows());
+  DLAF_ASSERT(band_size % matrix.blockSize().rows() == 0, "not yet implemented", band_size, matrix.blockSize().rows());
 
   DLAF_ASSERT(square_blocksize(matrix), matrix.blockSize());
   DLAF_ASSERT(square_size(matrix), matrix.blockSize());
 
   const auto k_diag = band_size / matrix.blockSize().rows();
 
-  for (SizeType j_tile = 0; j_tile < matrix.nrTiles().cols(); ++j_tile) {
-    for (SizeType i_tile = k_diag + j_tile; i_tile < matrix.nrTiles().rows(); ++i_tile) {
-      LocalTileIndex ij_tile{i_tile, j_tile};
+  // TODO setup band edge and its tranposed
+  for (SizeType j = 0; j < matrix.nrTiles().cols(); ++j) {
+    const GlobalTileIndex ij{j + k_diag, j};
 
-      const bool is_k_diag = i_tile == k_diag + j_tile;
+    if (!ij.isIn(matrix.nrTiles()))
+      continue;
 
-      hpx::dataflow(hpx::util::unwrapping([is_k_diag](const auto& tile_lo, const auto& tile_up) {
-        if (is_k_diag) {
-          // set strict lower...
-          lapack::laset(lapack::MatrixType::Lower,
-            tile_lo.size().rows() - 1, tile_lo.size().cols() - 1,
-            0, 0,
-            tile_lo.ptr({1, 0}), tile_lo.ld());
-          // ... and strict upper
-          lapack::laset(lapack::MatrixType::Upper,
-            tile_up.size().rows() - 1, tile_up.size().cols() - 1,
-            0, 0,
-            tile_up.ptr({0, 1}), tile_up.ld());
-        }
-        else {
-          dlaf::matrix::test::set(tile_lo, 0);
-          dlaf::matrix::test::set(tile_up, 0);
-        }
-      }), matrix(ij_tile), matrix(common::transposed(ij_tile)));
+    const auto& tile_lo = matrix(ij);
+
+    // setup the strictly lower to zero
+    lapack::laset(
+        lapack::MatrixType::Lower,
+        tile_lo.size().rows() - 1, tile_lo.size().cols() - 1,
+        0, 0,
+        tile_lo.ptr({1, 0}), tile_lo.ld());
+
+    copy_transposed(matrix(ij), matrix(common::transposed(ij)));
+  }
+
+  // TODO setup zeros in both lower and upper
+  for (SizeType j = 0; j < matrix.nrTiles().cols(); ++j) {
+    for (SizeType i = j + k_diag + 1; i < matrix.nrTiles().rows(); ++i) {
+      const GlobalTileIndex ij{i, j};
+      if (!ij.isIn(matrix.nrTiles()))
+          continue;
+
+      dlaf::matrix::test::set(matrix(ij), 0);
+      dlaf::matrix::test::set(matrix(common::transposed(ij)), 0);
     }
+  }
+
+  // TODO mirror on_diag
+  for (SizeType k = 0; k < matrix.nrTiles().rows(); ++k) {
+    const GlobalTileIndex kk{k, k};
+    const auto& tile = matrix(kk);
+
+    mirror_on_diag(tile);
   }
 }
 
-TYPED_TEST(CholeskyDistributedTest, Correctness) {
+TYPED_TEST(ReductionToBandTest, Correctness) {
   constexpr Device device = Device::CPU;
 
   for (auto&& comm_grid : this->commGrids()) {
@@ -207,22 +238,22 @@ TYPED_TEST(CholeskyDistributedTest, Correctness) {
 
         // TODO "allreduce" del risultato in due "matrici lapack" (Q e banda (salvata come general))
         // Each rank must collect the Q and the B (Q with the 1, B with both up/low and zero outside the band)
-        common::Pipeline<comm::CommunicatorGrid> serial_comm(comm_grid);
+        auto A = makeLocal(reference);
+        auto B = makeLocal(matrix_a);
+        auto Q = makeLocal(matrix_a); // TODO FIXME Q can be smaller, but then all_gather must copy a submatrix
 
-        Matrix<TypeParam, device> A = makeLocal(reference);
-        Matrix<TypeParam, device> B = makeLocal(matrix_a);
-        Matrix<TypeParam, device> Q = makeLocalQ(matrix_a, band_size);
+        all_gather(reference, A, comm_grid);
 
-        all_gather(reference, A, serial_comm);
+        all_gather(matrix_a, B, comm_grid);
+        setup_sym_band(B, B.blockSize().rows());
 
-        all_gather(matrix_a, B, serial_comm);
-        set_out_of_band(B, B.blockSize().rows());
+        all_gather(matrix_a, Q, comm_grid);
 
-        all_gather(matrix_a, Q, serial_comm);
+        //print(A, "A");
+        //print(B, "B");
+        //print(Q, "Q");
 
-        print(A, "A");
-        print(B, "B");
-        print(Q, "Q");
+        // TODO collect also taus
 
         // TODO su tutti i rank usiamo [[z,c]un,[s,d]or]mqr per applicare Q da sinistra e da destra
 
