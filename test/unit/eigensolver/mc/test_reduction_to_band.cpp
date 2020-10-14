@@ -198,6 +198,40 @@ void setup_sym_band(MatrixLocal<T>& matrix, const SizeType& band_size) {
   }
 }
 
+template <class T>
+auto makeLocalTaus(MatrixLocal<T>& q, const SizeType band_size, std::vector<hpx::shared_future<std::vector<T>>> fut_local_taus, comm::CommunicatorGrid comm_grid) {
+  using namespace dlaf::comm::sync;
+
+  std::vector<T> taus;
+
+  hpx::wait_all(fut_local_taus);
+  auto local_taus = hpx::util::unwrap(fut_local_taus);
+
+  DLAF_ASSERT(band_size == q.blockSize().cols(), band_size, q.blockSize());
+  DLAF_ASSERT(band_size % q.blockSize().cols() == 0, band_size, q.blockSize());
+
+  const auto h_blocks = q.nrTiles().cols() - (band_size / q.blockSize().cols());
+
+  for (auto index_block = 0; index_block < h_blocks; ++index_block) {
+    const auto owner = index_block % comm_grid.size().cols();
+    const bool is_owner = owner == comm_grid.rank().col();
+
+    std::vector<T> block;
+    if (is_owner) {
+      block = local_taus[to_sizet(index_block / comm_grid.size().cols())];
+      broadcast::send(comm_grid.rowCommunicator(), common::make_data(block.data(), block.size()));
+    }
+    else {
+      block.resize(to_sizet(q.blockSize().cols()));
+      broadcast::receive_from(owner, comm_grid.rowCommunicator(), common::make_data(block.data(), block.size()));
+    }
+
+    std::copy(block.begin(), block.end(), std::back_inserter(taus));
+  }
+
+  return taus;
+}
+
 TYPED_TEST(ReductionToBandTest, Correctness) {
   constexpr Device device = Device::CPU;
 
@@ -206,20 +240,22 @@ TYPED_TEST(ReductionToBandTest, Correctness) {
       for (const auto& block_size : square_block_sizes) {
         const SizeType band_size = block_size.rows();
 
+        Distribution distribution({size.rows(), size.cols()}, block_size, comm_grid.size(), comm_grid.rank(), {0, 0});
+
         // TODO setup a matrix
         Matrix<const TypeParam, device> reference = [&](){
-          Matrix<TypeParam, device> reference(size, block_size);
+          Matrix<TypeParam, device> reference(distribution);
           dlaf_test::matrix::util::set_random_hermitian(reference);
           return reference;
         }();
 
-        Matrix<TypeParam, device> matrix_a(size, block_size);
+        Matrix<TypeParam, device> matrix_a(std::move(distribution));
         dlaf::copy(reference, matrix_a);
 
         // TODO apply reduction-to-band
         DLAF_ASSERT(band_size == matrix_a.distribution().blockSize().rows(), "not yet implemented");
 
-        //dlaf::EigenSolver<Backend::MC>::reduction_to_band(comm_grid, matrix_a);
+        auto local_taus = dlaf::EigenSolver<Backend::MC>::reduction_to_band(comm_grid, matrix_a);
 
         // TODO check che la parte non-uplo non è cambiata
         auto check_uplo_unchanged = [&reference, &matrix_a](const GlobalElementIndex& index) {
@@ -239,14 +275,13 @@ TYPED_TEST(ReductionToBandTest, Correctness) {
         // TODO "allreduce" del risultato in due "matrici lapack" (Q e banda (salvata come general))
         // Each rank must collect the Q and the B (Q with the 1, B with both up/low and zero outside the band)
         auto A = makeLocal(reference);
-        auto B = makeLocal(matrix_a);
-        auto Q = makeLocal(matrix_a); // TODO FIXME Q can be smaller, but then all_gather must copy a submatrix
-
         all_gather(reference, A, comm_grid);
 
+        auto B = makeLocal(matrix_a);
         all_gather(matrix_a, B, comm_grid);
         setup_sym_band(B, B.blockSize().rows());
 
+        auto Q = makeLocal(matrix_a); // TODO FIXME Q can be smaller, but then all_gather must copy a submatrix
         all_gather(matrix_a, Q, comm_grid);
 
         //print(A, "A");
@@ -254,6 +289,10 @@ TYPED_TEST(ReductionToBandTest, Correctness) {
         //print(Q, "Q");
 
         // TODO collect also taus
+        auto taus = makeLocalTaus(Q, band_size, local_taus, comm_grid);
+
+        for (const auto& tau : taus)
+          std::cout << tau << std::endl;
 
         // TODO su tutti i rank usiamo [[z,c]un,[s,d]or]mqr per applicare Q da sinistra e da destra
 

@@ -9,6 +9,10 @@
 //
 #pragma once
 
+#include <vector>
+
+#include <hpx/future.hpp>
+
 #include "dlaf/communication/communicator_grid.h"
 #include "dlaf/eigensolver/internal.h"
 #include "dlaf/matrix.h"
@@ -21,7 +25,7 @@ struct EigenSolver<Backend::MC> {
   ///
   /// TODO
   template <class T>
-  static void reduction_to_band(comm::CommunicatorGrid grid, Matrix<T, Device::CPU>& mat_a);
+  static std::vector<hpx::shared_future<std::vector<T>>> reduction_to_band(comm::CommunicatorGrid grid, Matrix<T, Device::CPU>& mat_a);
 };
 
 }
@@ -32,7 +36,7 @@ struct EigenSolver<Backend::MC> {
 namespace dlaf {
 
 #define DLAF_EIGENSOLVER_ETI(KWORD, DATATYPE)                                   \
-  KWORD template void                                                           \
+  KWORD template std::vector<hpx::shared_future<std::vector<DATATYPE>>>         \
   EigenSolver<Backend::MC>::reduction_to_band<DATATYPE>(comm::CommunicatorGrid, \
                                                         Matrix<DATATYPE, Device::CPU>&);
 

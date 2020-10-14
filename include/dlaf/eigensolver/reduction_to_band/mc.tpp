@@ -17,13 +17,14 @@
 namespace dlaf {
 
 template <class T>
-void EigenSolver<Backend::MC>::reduction_to_band(comm::CommunicatorGrid grid,
+std::vector<hpx::shared_future<std::vector<T>>> EigenSolver<Backend::MC>::reduction_to_band(comm::CommunicatorGrid grid,
                                                  Matrix<T, Device::CPU>& mat_a) {
-  // DLAF_ASSERT(matrix::square_size(mat_a), mat_a);
-  // DLAF_ASSERT(matrix::square_blocksize(mat_a), mat_a);
-  // DLAF_ASSERT(matrix::equal_process_grid(mat_a, grid), mat_a, grid);
+  DLAF_ASSERT(matrix::square_size(mat_a), mat_a);
+  DLAF_ASSERT(matrix::square_blocksize(mat_a), mat_a);
+  // TODO fix for non-distributed
+  DLAF_ASSERT(matrix::equal_process_grid(mat_a, grid), mat_a, grid);
 
-  internal::mc::reduction_to_band(grid, mat_a);
+  return internal::mc::reduction_to_band(grid, mat_a);
 }
 
 }

@@ -168,9 +168,11 @@ void update_a(const LocalTileIndex at_start, MatrixT<T>& a, ConstMatrixT<T>& x, 
               FutureConstPanel<T> v, FutureConstPanel<T> v_tmp);
 }
 
-// Distributed implementation of reduction to band
+/// Distributed implementation of reduction to band
+/// @return a list of shared futures of vectors, where each vector contains a block of taus
 template <class Type>
-void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& mat_a) {
+std::vector<hpx::shared_future<std::vector<Type>>> reduction_to_band(comm::CommunicatorGrid grid,
+                                                                     Matrix<Type, Device::CPU>& mat_a) {
   using common::iterate_range2d;
   using common::make_data;
   using hpx::util::unwrapping;
@@ -183,11 +185,13 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
   const comm::Index2D rank = dist.rankIndex();
 
   const SizeType nb = mat_a.blockSize().rows();
-  const SizeType b = nb;  // TODO not yet implemented for the moment the panel is tile-wide
+  //const SizeType band_size = nb;  // TODO not yet implemented for the moment the panel is tile-wide
 
   const Distribution dist_block(LocalElementSize{nb, nb}, dist.blockSize());
 
   common::Pipeline<comm::CommunicatorGrid> serial_comm(std::move(grid));
+
+  std::vector<hpx::shared_future<std::vector<Type>>> taus;
 
   for (SizeType j_panel = 0; j_panel < (dist.nrTiles().cols() - 1); ++j_panel) {
     MatrixT<Type> t(dist_block);   // used just by the column
@@ -229,11 +233,12 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
       trace(">>> COMPUTING panel");
       trace(">>> Ai", Ai_size, Ai_start);
 
-      common::internal::vector<hpx::shared_future<Type>> taus(b);
+      common::internal::vector<hpx::shared_future<Type>> taus_panel;
 
       // for each column in the panel, compute reflector and update panel
-      // if reflector would be just the first 1, skip the last column
-      const SizeType last_reflector = (nb - 1) - (Ai_el_size_rows_global == nb ? 1 : 0);
+      // if this block has the last reflector, that would be just the first 1, skip the last column
+      const bool has_last_reflector = Ai_el_size_rows_global == nb;
+      const SizeType last_reflector = (nb - 1) + (has_last_reflector ? -1 : 0);
       for (SizeType j_reflector = 0; j_reflector <= last_reflector; ++j_reflector) {
         const TileElementIndex index_el_x0{j_reflector, j_reflector};
 
@@ -241,14 +246,28 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
 
         auto tau =
             compute_reflector(mat_a, Ai_start, Ai_size, Ai_start_global, index_el_x0, serial_comm);
-        taus[j_reflector] = tau;
+        taus_panel.push_back(tau);
         update_trailing_panel(mat_a, Ai_start, Ai_size, Ai_start_global, index_el_x0, tau, serial_comm);
 
         print(mat_a, std::string("A") + std::to_string(j_panel));
       }
 
       set_to_zero(t);  // TODO is it necessary?
-      compute_t_factor(t, mat_a, Ai_start, Ai_size, Ai_start_global, last_reflector, taus, serial_comm);
+      compute_t_factor(t, mat_a, Ai_start, Ai_size, Ai_start_global, last_reflector, taus_panel,
+                       serial_comm);
+
+      // TODO insert back
+      if (has_last_reflector)
+        taus_panel.push_back(hpx::make_ready_future<Type>(0));
+
+      taus.emplace_back(hpx::when_all(taus_panel.begin(), taus_panel.end())
+                            .then(unwrapping([](std::vector<hpx::shared_future<Type>>&& taus_block) {
+                              std::vector<Type> block;
+                              block.reserve(taus_block.size());
+                              for (const hpx::shared_future<Type>& tau_future : taus_block)
+                                block.emplace_back(tau_future.get());
+                              return block;
+                            })));
 
       // setup V0
       if (rank_v0 == rank) {
@@ -579,6 +598,8 @@ void reduction_to_band(comm::CommunicatorGrid grid, Matrix<Type, Device::CPU>& m
     // HER2K At = At - X . V* + V . X*
     update_a(At_start, mat_a, x, x_tmp, v, v_tmp);
   }
+
+  return taus;
 }
 
 namespace {
