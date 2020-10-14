@@ -17,8 +17,8 @@
 namespace dlaf {
 
 template <class T>
-std::vector<hpx::shared_future<std::vector<T>>> EigenSolver<Backend::MC>::reduction_to_band(comm::CommunicatorGrid grid,
-                                                 Matrix<T, Device::CPU>& mat_a) {
+std::vector<hpx::shared_future<std::vector<T>>> EigenSolver<Backend::MC>::reduction_to_band(
+    comm::CommunicatorGrid grid, Matrix<T, Device::CPU>& mat_a) {
   DLAF_ASSERT(matrix::square_size(mat_a), mat_a);
   DLAF_ASSERT(matrix::square_blocksize(mat_a), mat_a);
   // TODO fix for non-distributed
@@ -26,5 +26,4 @@ std::vector<hpx::shared_future<std::vector<T>>> EigenSolver<Backend::MC>::reduct
 
   return internal::mc::reduction_to_band(grid, mat_a);
 }
-
 }

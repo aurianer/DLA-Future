@@ -59,7 +59,7 @@ void print(ConstMatrixT<T>& matrix, std::string prefix, const bool force_out = f
 template <class T>
 void print_tile(const ConstTileT<T>& tile);
 
-#define TRACE_ON
+//#define TRACE_ON
 
 #ifdef TRACE_ON
 template <class T>
@@ -170,9 +170,9 @@ void update_a(const LocalTileIndex at_start, MatrixT<T>& a, ConstMatrixT<T>& x, 
 
 /// Distributed implementation of reduction to band
 /// @return a list of shared futures of vectors, where each vector contains a block of taus
-template <class Type>
-std::vector<hpx::shared_future<std::vector<Type>>> reduction_to_band(comm::CommunicatorGrid grid,
-                                                                     Matrix<Type, Device::CPU>& mat_a) {
+template <class T>
+std::vector<hpx::shared_future<std::vector<T>>> reduction_to_band(comm::CommunicatorGrid grid,
+                                                                  Matrix<T, Device::CPU>& mat_a) {
   using common::iterate_range2d;
   using common::make_data;
   using hpx::util::unwrapping;
@@ -185,17 +185,17 @@ std::vector<hpx::shared_future<std::vector<Type>>> reduction_to_band(comm::Commu
   const comm::Index2D rank = dist.rankIndex();
 
   const SizeType nb = mat_a.blockSize().rows();
-  //const SizeType band_size = nb;  // TODO not yet implemented for the moment the panel is tile-wide
+  // const SizeType band_size = nb;  // TODO not yet implemented for the moment the panel is tile-wide
 
   const Distribution dist_block(LocalElementSize{nb, nb}, dist.blockSize());
 
   common::Pipeline<comm::CommunicatorGrid> serial_comm(std::move(grid));
 
-  std::vector<hpx::shared_future<std::vector<Type>>> taus;
+  std::vector<hpx::shared_future<std::vector<T>>> taus;
 
   for (SizeType j_panel = 0; j_panel < (dist.nrTiles().cols() - 1); ++j_panel) {
-    MatrixT<Type> t(dist_block);   // used just by the column
-    MatrixT<Type> v0(dist_block);  // used just by the owner
+    MatrixT<T> t(dist_block);   // used just by the column
+    MatrixT<T> v0(dist_block);  // used just by the owner
 
     const GlobalTileIndex Ai_start_global{j_panel + 1, j_panel};
     const GlobalTileIndex At_start_global{Ai_start_global + GlobalTileSize{0, 1}};
@@ -233,7 +233,7 @@ std::vector<hpx::shared_future<std::vector<Type>>> reduction_to_band(comm::Commu
       trace(">>> COMPUTING panel");
       trace(">>> Ai", Ai_size, Ai_start);
 
-      common::internal::vector<hpx::shared_future<Type>> taus_panel;
+      common::internal::vector<hpx::shared_future<T>> taus_panel;
 
       // for each column in the panel, compute reflector and update panel
       // if this block has the last reflector, that would be just the first 1, skip the last column
@@ -258,13 +258,13 @@ std::vector<hpx::shared_future<std::vector<Type>>> reduction_to_band(comm::Commu
 
       // TODO insert back
       if (has_last_reflector)
-        taus_panel.push_back(hpx::make_ready_future<Type>(0));
+        taus_panel.push_back(hpx::make_ready_future<T>(0));
 
       taus.emplace_back(hpx::when_all(taus_panel.begin(), taus_panel.end())
-                            .then(unwrapping([](std::vector<hpx::shared_future<Type>>&& taus_block) {
-                              std::vector<Type> block;
+                            .then(unwrapping([](std::vector<hpx::shared_future<T>>&& taus_block) {
+                              std::vector<T> block;
                               block.reserve(taus_block.size());
-                              for (const hpx::shared_future<Type>& tau_future : taus_block)
+                              for (const hpx::shared_future<T>& tau_future : taus_block)
                                 block.emplace_back(tau_future.get());
                               return block;
                             })));
@@ -283,8 +283,8 @@ std::vector<hpx::shared_future<std::vector<Type>>> reduction_to_band(comm::Commu
           // clang-format off
           lapack::laset(lapack::MatrixType::Upper,
               tile_v.size().rows(), tile_v.size().cols(),
-              Type(0), // off diag
-              Type(1), // on  diag
+              T(0), // off diag
+              T(1), // on  diag
               tile_v.ptr(), tile_v.ld());
           // clang-format on
         });
@@ -318,12 +318,12 @@ std::vector<hpx::shared_future<std::vector<Type>>> reduction_to_band(comm::Commu
     //
     // The latter step is needed because reflector components are stored in the original matrix
     // but the first tile V0 has to be stored away (see V0 setup above)
-    MatrixT<Type> mat_v(dist_col);
-    FutureConstPanel<Type> v(Ai_size.rows());
+    MatrixT<T> mat_v(dist_col);
+    FutureConstPanel<T> v(Ai_size.rows());
 
     // TODO Avoid useless communication
     for (const auto& index_v : iterate_range2d(dist_col.localNrTiles())) {
-      FutureConstTile<Type> tile_v;
+      FutureConstTile<T> tile_v;
 
       if (is_panel_rank_col) {
         const auto local_v_wrt_a = index_v + ai_offset;
@@ -360,8 +360,8 @@ std::vector<hpx::shared_future<std::vector<Type>>> reduction_to_band(comm::Commu
     // Morevoer, also in this case an easy access to the tile is provided through a vector.
     // This allows to uniformly access the right tile just by giving the transposed column
     // coordinate, without carying whether it is stored in the mat_v_tmp workspace or not
-    MatrixT<Type> mat_v_tmp(dist_row);
-    FutureConstPanel<Type> v_tmp(at_localsize.cols());
+    MatrixT<T> mat_v_tmp(dist_row);
+    FutureConstPanel<T> v_tmp(at_localsize.cols());
 
     // TODO Avoid useless communication
     for (const auto& index_v : iterate_range2d(dist_row.localNrTiles())) {
@@ -372,7 +372,7 @@ std::vector<hpx::shared_future<std::vector<Type>>> reduction_to_band(comm::Commu
       // in addition to exploiting that the entire row owns the same information
       const IndexT_MPI row_rank_owner = dist.template rankGlobalTile<Coord::Row>(col_v_wrt_a);
 
-      FutureConstTile<Type> tile_v;
+      FutureConstTile<T> tile_v;
 
       if (row_rank_owner == rank.row()) {
         const SizeType row_v_owner =
@@ -400,7 +400,7 @@ std::vector<hpx::shared_future<std::vector<Type>>> reduction_to_band(comm::Commu
 
     // 3A COMPUTE W
     // Just the column of ranks owning the Ai panel, compute the W
-    MatrixT<Type> w(dist_col);
+    MatrixT<T> w(dist_col);
     if (is_panel_rank_col)
       compute_w(w, v, t);  // TRMM W = V . T
 
@@ -413,7 +413,7 @@ std::vector<hpx::shared_future<std::vector<Type>>> reduction_to_band(comm::Commu
 
     // ... and column-wise
     // Again, this uses the same concept as before for v_tmp.
-    MatrixT<Type> w_tmp(dist_row);
+    MatrixT<T> w_tmp(dist_row);
     set_to_zero(w_tmp);  // TODO superflous? if it is not used here, it will not be used later?
 
     // TODO evaluate to source-mask also here
@@ -429,12 +429,12 @@ std::vector<hpx::shared_future<std::vector<Type>>> reduction_to_band(comm::Commu
                                                at_offset.rows(),
                                            0};
 
-        FutureConstTile<Type> tile_w = w.read(index_w_owner);
+        FutureConstTile<T> tile_w = w.read(index_w_owner);
 
         hpx::dataflow(broadcast_send(col_wise{}), std::move(tile_w), serial_comm());
       }
       else {
-        FutureTile<Type> tile_w = w_tmp(index_w);
+        FutureTile<T> tile_w = w_tmp(index_w);
 
         hpx::dataflow(broadcast_recv(col_wise{}, row_rank_owner), std::move(tile_w), serial_comm());
       }
@@ -449,9 +449,8 @@ std::vector<hpx::shared_future<std::vector<Type>>> reduction_to_band(comm::Commu
     // When the tile is not part of the main diagonal, the same tile has to be used for two computations
     // that will contribute to two different rows of X: the ones indexed with row and col.
     // This is achieved by storing the two results in two different workspaces: X and X_conj respectively.
-    MatrixT<Type> x({(at_localsize.rows() != 0 ? at_localsize.rows() : 1) * nb, nb}, dist.blockSize());
-    MatrixT<Type> x_tmp({nb, (at_localsize.cols() != 0 ? at_localsize.cols() : 1) * nb},
-                        dist.blockSize());
+    MatrixT<T> x({(at_localsize.rows() != 0 ? at_localsize.rows() : 1) * nb, nb}, dist.blockSize());
+    MatrixT<T> x_tmp({nb, (at_localsize.cols() != 0 ? at_localsize.cols() : 1) * nb}, dist.blockSize());
 
     // TODO maybe it may be enough doing it if (At_size.isEmpty())
     set_to_zero(x);
@@ -492,7 +491,7 @@ std::vector<hpx::shared_future<std::vector<Type>>> reduction_to_band(comm::Commu
         const SizeType index_x_row_loc =
             dist.template localTileFromGlobalTile<Coord::Row>(index_x_row) - at_offset.rows();
 
-        FutureTile<Type> tile_x = x(LocalTileIndex{index_x_row_loc, 0});
+        FutureTile<T> tile_x = x(LocalTileIndex{index_x_row_loc, 0});
 
         hpx::dataflow(reduce_x_func, std::move(tile_x), serial_comm());
       }
@@ -503,12 +502,12 @@ std::vector<hpx::shared_future<std::vector<Type>>> reduction_to_band(comm::Commu
           trace("reducing send X col-wise");
           print_tile(tile_x_conj);
 
-          Type fake;
+          T fake;
           reduce(rank_owner_row, comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x_conj),
                  make_data(&fake, 0));
         });
 
-        FutureConstTile<Type> tile_x = x_tmp.read(index_x);
+        FutureConstTile<T> tile_x = x_tmp.read(index_x);
 
         hpx::dataflow(reduce_x_func, std::move(tile_x), serial_comm());
       }
@@ -533,7 +532,7 @@ std::vector<hpx::shared_future<std::vector<Type>>> reduction_to_band(comm::Commu
 
       // 3C COMPUTE W2
       // W2 can be computed by the panel column rank only, it is the only one that has the X
-      MatrixT<Type> w2 = std::move(t);
+      MatrixT<T> w2 = std::move(t);
       set_to_zero(w2);  // superflous? I don't think so, because if any tile does not participate, it has
                         // to not contribute with any value
 

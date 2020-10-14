@@ -25,7 +25,8 @@ struct EigenSolver<Backend::MC> {
   ///
   /// TODO
   template <class T>
-  static std::vector<hpx::shared_future<std::vector<T>>> reduction_to_band(comm::CommunicatorGrid grid, Matrix<T, Device::CPU>& mat_a);
+  static std::vector<hpx::shared_future<std::vector<T>>> reduction_to_band(
+      comm::CommunicatorGrid grid, Matrix<T, Device::CPU>& mat_a);
 };
 
 }

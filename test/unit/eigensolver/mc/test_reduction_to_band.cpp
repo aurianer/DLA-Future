@@ -13,21 +13,21 @@
 
 #include <gtest/gtest.h>
 
-#include "dlaf/lapack_tile.h" // Just for lapack.hh workaround
+#include "dlaf/lapack_tile.h"  // Just for lapack.hh workaround
 
+#include "dlaf/common/pipeline.h"
 #include "dlaf/communication/communicator.h"
 #include "dlaf/communication/communicator_grid.h"
+#include "dlaf/communication/functions_sync.h"
 #include "dlaf/communication/sync/broadcast.h"
-#include "dlaf/common/pipeline.h"
 #include "dlaf/matrix.h"
+#include "dlaf/matrix/copy.h"
 #include "dlaf/memory/memory_view.h"
 #include "dlaf/types.h"
 #include "dlaf/util_matrix.h"
-#include "dlaf/matrix/copy.h"
-#include "dlaf/communication/functions_sync.h"
 
-#include "dlaf_test/matrix/matrix_local.h"
 #include "dlaf_test/comm_grids/grids_6_ranks.h"
+#include "dlaf_test/matrix/matrix_local.h"
 #include "dlaf_test/matrix/util_matrix.h"
 #include "dlaf_test/matrix/util_tile.h"
 #include "dlaf_test/util_types.h"
@@ -54,20 +54,19 @@ public:
 };
 
 using NonComplexTypes = ::testing::Types<double, float>;
-TYPED_TEST_SUITE(ReductionToBandTest, NonComplexTypes); //MatrixElementTypes);
+TYPED_TEST_SUITE(ReductionToBandTest, NonComplexTypes);  // MatrixElementTypes);
 
-const std::vector<LocalElementSize> square_sizes{{3, 3}, {9, 9}};
+const std::vector<LocalElementSize> square_sizes{{3, 3}, {12, 12}, {24, 24}};
 const std::vector<TileElementSize> square_block_sizes{{3, 3}};
-
-
 
 template <class T>
 MatrixLocal<T> makeLocal(const Matrix<const T, Device::CPU>& matrix) {
   return {matrix.size(), matrix.distribution().blockSize()};
 }
 
-template <class T, Device device> // TODO add tile_selector predicate
-void all_gather(Matrix<const T, device>& source, MatrixLocal<T>& dest, comm::CommunicatorGrid comm_grid) {
+template <class T, Device device>  // TODO add tile_selector predicate
+void all_gather(Matrix<const T, device>& source, MatrixLocal<T>& dest,
+                comm::CommunicatorGrid comm_grid) {
   const auto& dist_source = source.distribution();
   const auto rank = dist_source.rankIndex();
 
@@ -78,16 +77,12 @@ void all_gather(Matrix<const T, device>& source, MatrixLocal<T>& dest, comm::Com
 
     if (owner == rank) {
       const auto& source_tile = source.read(ij_tile).get();
-      comm::sync::broadcast::send(
-          comm_grid.fullCommunicator(),
-          source_tile);
+      comm::sync::broadcast::send(comm_grid.fullCommunicator(), source_tile);
       copy(source_tile, dest_tile);
     }
     else {
-      comm::sync::broadcast::receive_from(
-          comm_grid.rankFullCommunicator(owner),
-          comm_grid.fullCommunicator(),
-          dest_tile);
+      comm::sync::broadcast::receive_from(comm_grid.rankFullCommunicator(owner),
+                                          comm_grid.fullCommunicator(), dest_tile);
     }
   }
 }
@@ -114,15 +109,17 @@ void copy_transposed(const Tile<const T, Device::CPU>& from, const Tile<T, Devic
 // band_size in elements
 template <class T>
 void setup_sym_band(MatrixLocal<T>& matrix, const SizeType& band_size) {
-  DLAF_ASSERT(band_size == matrix.blockSize().rows(), "not yet implemented", band_size, matrix.blockSize().rows());
-  DLAF_ASSERT(band_size % matrix.blockSize().rows() == 0, "not yet implemented", band_size, matrix.blockSize().rows());
+  DLAF_ASSERT(band_size == matrix.blockSize().rows(), "not yet implemented", band_size,
+              matrix.blockSize().rows());
+  DLAF_ASSERT(band_size % matrix.blockSize().rows() == 0, "not yet implemented", band_size,
+              matrix.blockSize().rows());
 
   DLAF_ASSERT(square_blocksize(matrix), matrix.blockSize());
   DLAF_ASSERT(square_size(matrix), matrix.blockSize());
 
   const auto k_diag = band_size / matrix.blockSize().rows();
 
-  // TODO setup band edge and its tranposed
+  // setup band "edge" and its tranposed
   for (SizeType j = 0; j < matrix.nrTiles().cols(); ++j) {
     const GlobalTileIndex ij{j + k_diag, j};
 
@@ -132,28 +129,30 @@ void setup_sym_band(MatrixLocal<T>& matrix, const SizeType& band_size) {
     const auto& tile_lo = matrix(ij);
 
     // setup the strictly lower to zero
+    // clang-format off
     lapack::laset(
         lapack::MatrixType::Lower,
         tile_lo.size().rows() - 1, tile_lo.size().cols() - 1,
         0, 0,
         tile_lo.ptr({1, 0}), tile_lo.ld());
+    // clang-format on
 
     copy_transposed(matrix(ij), matrix(common::transposed(ij)));
   }
 
-  // TODO setup zeros in both lower and upper
+  // setup zeros in both lower and upper out-of-band
   for (SizeType j = 0; j < matrix.nrTiles().cols(); ++j) {
     for (SizeType i = j + k_diag + 1; i < matrix.nrTiles().rows(); ++i) {
       const GlobalTileIndex ij{i, j};
       if (!ij.isIn(matrix.nrTiles()))
-          continue;
+        continue;
 
       dlaf::matrix::test::set(matrix(ij), 0);
       dlaf::matrix::test::set(matrix(common::transposed(ij)), 0);
     }
   }
 
-  // TODO mirror on_diag
+  // mirror band (diagonal tiles are correctly set just in the lower part)
   for (SizeType k = 0; k < matrix.nrTiles().rows(); ++k) {
     const GlobalTileIndex kk{k, k};
     const auto& tile = matrix(kk);
@@ -213,10 +212,11 @@ TYPED_TEST(ReductionToBandTest, Correctness) {
         const SizeType band_size_tiles = band_size / block_size.rows();
         const SizeType k_reflectors = size.rows() - band_size;  // -1 the last one is superflous
 
-        Distribution distribution({size.rows(), size.cols()}, block_size, comm_grid.size(), comm_grid.rank(), {0, 0});
+        Distribution distribution({size.rows(), size.cols()}, block_size, comm_grid.size(),
+                                  comm_grid.rank(), {0, 0});
 
-        // TODO setup a matrix
-        Matrix<const TypeParam, device> reference = [&](){
+        // setup the reference input matrix
+        Matrix<const TypeParam, device> reference = [&]() {
           Matrix<TypeParam, device> reference(distribution);
           dlaf_test::matrix::util::set_random_hermitian(reference);
           return reference;
@@ -225,13 +225,13 @@ TYPED_TEST(ReductionToBandTest, Correctness) {
         Matrix<TypeParam, device> matrix_a(std::move(distribution));
         dlaf::copy(reference, matrix_a);
 
-        // TODO apply reduction-to-band
-        DLAF_ASSERT(band_size == matrix_a.distribution().blockSize().rows(), "not yet implemented");
+        // Apply reduction-to-band
+        DLAF_ASSERT(band_size == matrix_a.blockSize().rows(), "not yet implemented");
 
         auto local_taus = dlaf::EigenSolver<Backend::MC>::reduction_to_band(comm_grid, matrix_a);
 
-        // TODO check che la parte non-uplo non è cambiata
-        auto check_uplo_unchanged = [&reference, &matrix_a](const GlobalElementIndex& index) {
+        // First basic check: the reduction should not affect the strictly upper part of the input
+        auto check_rest_unchanged = [&reference, &matrix_a](const GlobalElementIndex& index) {
           const auto& dist = reference.distribution();
           const auto ij_tile = dist.globalTileIndex(index);
           const auto ij_element_wrt_tile = dist.tileElementIndex(index);
@@ -243,7 +243,7 @@ TYPED_TEST(ReductionToBandTest, Correctness) {
           else
             return reference.read(ij_tile).get()(ij_element_wrt_tile);
         };
-        CHECK_MATRIX_NEAR(check_uplo_unchanged, matrix_a, 0, 1e-3);
+        CHECK_MATRIX_NEAR(check_rest_unchanged, matrix_a, 0, 1e-3);
 
         // The distributed result of reduction to band has the following characteristics:
         // - just lower part is relevant (diagonal is included)
