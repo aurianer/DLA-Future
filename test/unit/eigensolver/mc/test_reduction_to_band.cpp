@@ -274,29 +274,50 @@ TYPED_TEST(ReductionToBandTest, Correctness) {
 
         // TODO "allreduce" del risultato in due "matrici lapack" (Q e banda (salvata come general))
         // Each rank must collect the Q and the B (Q with the 1, B with both up/low and zero outside the band)
-        auto A = makeLocal(reference);
-        all_gather(reference, A, comm_grid);
-
         auto B = makeLocal(matrix_a);
         all_gather(matrix_a, B, comm_grid);
         setup_sym_band(B, B.blockSize().rows());
 
+        //print(B, "B");
+
         auto Q = makeLocal(matrix_a); // TODO FIXME Q can be smaller, but then all_gather must copy a submatrix
         all_gather(matrix_a, Q, comm_grid);
 
-        //print(A, "A");
-        //print(B, "B");
         //print(Q, "Q");
 
         // TODO collect also taus
         auto taus = makeLocalTaus(Q, band_size, local_taus, comm_grid);
 
-        for (const auto& tau : taus)
-          std::cout << tau << std::endl;
-
         // TODO su tutti i rank usiamo [[z,c]un,[s,d]or]mqr per applicare Q da sinistra e da destra
 
+        /// Hn* ... H2* H1* A H1 H2 ... Hn
+        /// Q* A Q = B
+        ///
+        /// Q B Q* = A
+        /// Q = H1 H2 ... Hn
+        /// H1 H2 ... Hn B Hn* ... H2* H1*
+        const SizeType k_reflectors = to_SizeType(taus.size()) - 1;
+        const SizeType q_start = band_size / Q.blockSize().rows();
+
+        lapack::ormqr(lapack::Side::Left, lapack::Op::NoTrans,
+          B.size().rows() - band_size, B.size().cols(), k_reflectors,
+          Q(GlobalTileIndex{q_start, 0}).ptr(), Q.ld(),
+          taus.data(),
+          B(GlobalTileIndex{q_start, 0}).ptr(), B.ld());
+
+        lapack::ormqr(lapack::Side::Right, lapack::Op::ConjTrans,
+          B.size().rows(), B.size().cols() - band_size, k_reflectors,
+          Q(GlobalTileIndex{q_start, 0}).ptr(), Q.ld(),
+          taus.data(),
+          B(GlobalTileIndex{0, q_start}).ptr(), B.ld());
+
         // TODO ogni rank fa il check con la parte uplo della A originale.
+        //print(reference, "A");
+        //print(B, "B");
+        for (const auto& index : common::iterate_range2d(reference.distribution().localNrTiles())) {
+          const auto global_index = reference.distribution().globalTileIndex(index);
+          CHECK_TILE_NEAR(reference.read(index).get(), B(global_index), 1e-3, 1e-3);
+        }
       }
     }
   }
