@@ -13,6 +13,8 @@
 
 #include <gtest/gtest.h>
 
+#include "dlaf/lapack_tile.h" // Just for lapack.hh workaround
+
 #include "dlaf/communication/communicator.h"
 #include "dlaf/communication/communicator_grid.h"
 #include "dlaf/communication/sync/broadcast.h"
@@ -54,52 +56,14 @@ public:
 using NonComplexTypes = ::testing::Types<double, float>;
 TYPED_TEST_SUITE(ReductionToBandTest, NonComplexTypes); //MatrixElementTypes);
 
-const std::vector<LocalElementSize> square_sizes{{8, 8}};
-const std::vector<TileElementSize> square_block_sizes{{2, 2}};
+const std::vector<LocalElementSize> square_sizes{{3, 3}, {9, 9}};
+const std::vector<TileElementSize> square_block_sizes{{3, 3}};
+
+
 
 template <class T>
-void print(Matrix<const T, Device::CPU>& matrix, std::string prefix) {
-  using common::iterate_range2d;
-
-  const auto& distribution = matrix.distribution();
-
-  std::ostringstream ss;
-  int rank;
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-  ss << prefix << rank;
-  prefix = ss.str();
-
-  ss.str("");
-  ss.clear();
-  ss << prefix << " = np.zeros((" << distribution.size() << "))" << std::endl;
-
-  for (const auto& index_tile : iterate_range2d(distribution.localNrTiles())) {
-    const auto& tile = matrix.read(index_tile).get();
-
-    for (const auto& index_el : iterate_range2d(tile.size())) {
-      GlobalElementIndex index_g{
-          distribution.template globalElementFromLocalTileAndTileElement<Coord::Row>(index_tile.row(),
-                                                                                     index_el.row()),
-          distribution.template globalElementFromLocalTileAndTileElement<Coord::Col>(index_tile.col(),
-                                                                                     index_el.col()),
-      };
-      ss << prefix << "[" << index_g.row() << "," << index_g.col() << "] = " << tile(index_el)
-         << std::endl;
-    }
-  }
-
-  std::cout << ss.str() << std::endl;
-}
-
-template <class T>
-MatrixLocal<T> createLocalMatrix(SizeType rows, SizeType cols, TileElementSize blocksize) {
-  return {{rows, cols}, std::move(blocksize)};
-}
-
-template <class T>
-auto makeLocal(const Matrix<const T, Device::CPU>& matrix) {
-  const auto from_size = matrix.size();
-  return createLocalMatrix<T>(from_size.rows(), from_size.cols(), matrix.distribution().blockSize());
+MatrixLocal<T> makeLocal(const Matrix<const T, Device::CPU>& matrix) {
+  return {matrix.size(), matrix.distribution().blockSize()};
 }
 
 template <class T, Device device> // TODO add tile_selector predicate
@@ -199,34 +163,41 @@ void setup_sym_band(MatrixLocal<T>& matrix, const SizeType& band_size) {
 }
 
 template <class T>
-auto makeLocalTaus(MatrixLocal<T>& q, const SizeType band_size, std::vector<hpx::shared_future<std::vector<T>>> fut_local_taus, comm::CommunicatorGrid comm_grid) {
+auto all_gather_taus(const SizeType k, const SizeType chunk_size, const SizeType band_size,
+                     std::vector<hpx::shared_future<std::vector<T>>> fut_local_taus,
+                     comm::CommunicatorGrid comm_grid) {
   using namespace dlaf::comm::sync;
 
   std::vector<T> taus;
+  taus.reserve(to_sizet(k));
 
   hpx::wait_all(fut_local_taus);
   auto local_taus = hpx::util::unwrap(fut_local_taus);
 
-  DLAF_ASSERT(band_size == q.blockSize().cols(), band_size, q.blockSize());
-  DLAF_ASSERT(band_size % q.blockSize().cols() == 0, band_size, q.blockSize());
+  DLAF_ASSERT(band_size == chunk_size, band_size, chunk_size);
+  DLAF_ASSERT(k % chunk_size == 0, k, band_size);
 
-  const auto h_blocks = q.nrTiles().cols() - (band_size / q.blockSize().cols());
+  const auto n_chunks = k / chunk_size;
 
-  for (auto index_block = 0; index_block < h_blocks; ++index_block) {
-    const auto owner = index_block % comm_grid.size().cols();
+  for (auto index_chunk = 0; index_chunk < n_chunks; ++index_chunk) {
+    const auto owner = index_chunk % comm_grid.size().cols();
     const bool is_owner = owner == comm_grid.rank().col();
 
-    std::vector<T> block;
+    std::vector<T> chunk_data;
     if (is_owner) {
-      block = local_taus[to_sizet(index_block / comm_grid.size().cols())];
-      broadcast::send(comm_grid.rowCommunicator(), common::make_data(block.data(), block.size()));
+      const auto index_chunk_local = to_sizet(index_chunk / comm_grid.size().cols());
+      chunk_data = local_taus[index_chunk_local];
+      broadcast::send(comm_grid.rowCommunicator(),
+                      common::make_data(chunk_data.data(), chunk_data.size()));
     }
     else {
-      block.resize(to_sizet(q.blockSize().cols()));
-      broadcast::receive_from(owner, comm_grid.rowCommunicator(), common::make_data(block.data(), block.size()));
+      chunk_data.resize(to_sizet(chunk_size));
+      broadcast::receive_from(owner, comm_grid.rowCommunicator(),
+                              common::make_data(chunk_data.data(), chunk_data.size()));
     }
 
-    std::copy(block.begin(), block.end(), std::back_inserter(taus));
+    // copy each chunk contiguously
+    std::copy(chunk_data.begin(), chunk_data.end(), std::back_inserter(taus));
   }
 
   return taus;
@@ -239,6 +210,8 @@ TYPED_TEST(ReductionToBandTest, Correctness) {
     for (const auto& size : square_sizes) {
       for (const auto& block_size : square_block_sizes) {
         const SizeType band_size = block_size.rows();
+        const SizeType band_size_tiles = band_size / block_size.rows();
+        const SizeType k_reflectors = size.rows() - band_size;  // -1 the last one is superflous
 
         Distribution distribution({size.rows(), size.cols()}, block_size, comm_grid.size(), comm_grid.rank(), {0, 0});
 
@@ -272,51 +245,70 @@ TYPED_TEST(ReductionToBandTest, Correctness) {
         };
         CHECK_MATRIX_NEAR(check_uplo_unchanged, matrix_a, 0, 1e-3);
 
-        // TODO "allreduce" del risultato in due "matrici lapack" (Q e banda (salvata come general))
-        // Each rank must collect the Q and the B (Q with the 1, B with both up/low and zero outside the band)
-        auto B = makeLocal(matrix_a);
-        all_gather(matrix_a, B, comm_grid);
-        setup_sym_band(B, B.blockSize().rows());
+        // The distributed result of reduction to band has the following characteristics:
+        // - just lower part is relevant (diagonal is included)
+        // - it stores the lower part of the band (B)
+        // - and the matrix V with all the reflectors (the 1 component of each reflector is omitted)
+        //
+        // Each rank collects locally the full matrix by storing each part separately
+        // - the B matrix, which is then "completed" by zeroing elements out of the band, and by mirroring the
+        //    existing part of the band
+        // - the V matrix, whose relevant part is the submatrix underneath the band
 
-        //print(B, "B");
+        auto mat_b = makeLocal(matrix_a);
+        all_gather(matrix_a, mat_b, comm_grid);
+        setup_sym_band(mat_b, mat_b.blockSize().rows());
 
-        auto Q = makeLocal(matrix_a); // TODO FIXME Q can be smaller, but then all_gather must copy a submatrix
-        all_gather(matrix_a, Q, comm_grid);
+        auto mat_v = makeLocal(matrix_a);
+        all_gather(matrix_a, mat_v, comm_grid);
+        // TODO FIXME mat_v can be smaller, but then all_gather must copy a submatrix
+        const GlobalTileIndex v_offset{band_size_tiles, 0};
 
-        //print(Q, "Q");
+        // Finally, collect locally tau values, which together with V allow to apply the Q transformation
+        auto taus = all_gather_taus(k_reflectors, block_size.rows(), band_size, local_taus, comm_grid);
+        DLAF_ASSERT(to_SizeType(taus.size()) == k_reflectors, taus.size(), k_reflectors);
 
-        // TODO collect also taus
-        auto taus = makeLocalTaus(Q, band_size, local_taus, comm_grid);
+        // Now that all input are collected locally, it's time to apply the transformation,
+        // ...but just if there is any
+        if (v_offset.isIn(mat_v.nrTiles())) {
+          // Reduction to band returns a sequence of transformations applied from left and right to A
+          // allowing to reduce the matrix A to a band matrix B
+          //
+          // Hn* ... H2* H1* A H1 H2 ... Hn
+          // Q* A Q = B
+          //
+          // Applying the inverse of the same transformations, we can go from B to A
+          // Q B Q* = A
+          // Q = H1 H2 ... Hn
+          // H1 H2 ... Hn B Hn* ... H2* H1*
 
-        // TODO su tutti i rank usiamo [[z,c]un,[s,d]or]mqr per applicare Q da sinistra e da destra
+          // apply from left...
+          const GlobalTileIndex left_offset{band_size_tiles, 0};
+          const GlobalElementSize left_size{mat_b.size().rows() - band_size, mat_b.size().cols()};
+          // clang-format off
+          lapack::ormqr(lapack::Side::Left, lapack::Op::NoTrans,
+            left_size.rows(), left_size.cols(), k_reflectors,
+            mat_v(v_offset).ptr(), mat_v.ld(),
+            taus.data(),
+            mat_b(left_offset).ptr(), mat_b.ld());
+          // clang-format on
 
-        /// Hn* ... H2* H1* A H1 H2 ... Hn
-        /// Q* A Q = B
-        ///
-        /// Q B Q* = A
-        /// Q = H1 H2 ... Hn
-        /// H1 H2 ... Hn B Hn* ... H2* H1*
-        const SizeType k_reflectors = to_SizeType(taus.size()) - 1;
-        const SizeType q_start = band_size / Q.blockSize().rows();
+          // ... and from right
+          const GlobalTileIndex right_offset = common::transposed(left_offset);
+          const GlobalElementSize right_size = common::transposed(left_size);
+          // clang-format off
+          lapack::ormqr(lapack::Side::Right, lapack::Op::ConjTrans,
+            right_size.rows(), right_size.cols(), k_reflectors,
+            mat_v(v_offset).ptr(), mat_v.ld(),
+            taus.data(),
+            mat_b(right_offset).ptr(), mat_b.ld());
+          // clang-format on
+        }
 
-        lapack::ormqr(lapack::Side::Left, lapack::Op::NoTrans,
-          B.size().rows() - band_size, B.size().cols(), k_reflectors,
-          Q(GlobalTileIndex{q_start, 0}).ptr(), Q.ld(),
-          taus.data(),
-          B(GlobalTileIndex{q_start, 0}).ptr(), B.ld());
-
-        lapack::ormqr(lapack::Side::Right, lapack::Op::ConjTrans,
-          B.size().rows(), B.size().cols() - band_size, k_reflectors,
-          Q(GlobalTileIndex{q_start, 0}).ptr(), Q.ld(),
-          taus.data(),
-          B(GlobalTileIndex{0, q_start}).ptr(), B.ld());
-
-        // TODO ogni rank fa il check con la parte uplo della A originale.
-        //print(reference, "A");
-        //print(B, "B");
+        // Eventaully, check the result obtained by applying the inverse transformation equals the original matrix
         for (const auto& index : common::iterate_range2d(reference.distribution().localNrTiles())) {
           const auto global_index = reference.distribution().globalTileIndex(index);
-          CHECK_TILE_NEAR(reference.read(index).get(), B(global_index), 1e-3, 1e-3);
+          CHECK_TILE_NEAR(reference.read(index).get(), mat_b(global_index), 1e-3, 1e-3);
         }
       }
     }
