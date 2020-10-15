@@ -53,8 +53,7 @@ public:
   }
 };
 
-using NonComplexTypes = ::testing::Types<double, float>;
-TYPED_TEST_SUITE(ReductionToBandTest, NonComplexTypes);  // MatrixElementTypes);
+TYPED_TEST_SUITE(ReductionToBandTest, MatrixElementTypes);
 
 const std::vector<LocalElementSize> square_sizes{{3, 3}, {12, 12}, {24, 24}};
 const std::vector<TileElementSize> square_block_sizes{{3, 3}};
@@ -286,7 +285,7 @@ TYPED_TEST(ReductionToBandTest, Correctness) {
           const GlobalTileIndex left_offset{band_size_tiles, 0};
           const GlobalElementSize left_size{mat_b.size().rows() - band_size, mat_b.size().cols()};
           // clang-format off
-          lapack::ormqr(lapack::Side::Left, lapack::Op::NoTrans,
+          lapack::unmqr(lapack::Side::Left, lapack::Op::NoTrans,
             left_size.rows(), left_size.cols(), k_reflectors,
             mat_v(v_offset).ptr(), mat_v.ld(),
             taus.data(),
@@ -297,7 +296,7 @@ TYPED_TEST(ReductionToBandTest, Correctness) {
           const GlobalTileIndex right_offset = common::transposed(left_offset);
           const GlobalElementSize right_size = common::transposed(left_size);
           // clang-format off
-          lapack::ormqr(lapack::Side::Right, lapack::Op::ConjTrans,
+          lapack::unmqr(lapack::Side::Right, lapack::Op::ConjTrans,
             right_size.rows(), right_size.cols(), k_reflectors,
             mat_v(v_offset).ptr(), mat_v.ld(),
             taus.data(),

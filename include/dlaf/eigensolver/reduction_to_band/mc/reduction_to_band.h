@@ -696,7 +696,7 @@ hpx::shared_future<T> compute_reflector(MatrixT<T>& a, const LocalTileIndex ai_s
       // clang-format off
       const params_reflector_t params{
         x0_and_norm.first,
-        std::signbit(params.x0) ? norm : -norm
+        std::signbit(std::real(params.x0)) ? norm : -norm
       };
       // clang-format on
 
@@ -1008,7 +1008,7 @@ void compute_t_factor(MatrixT<Type>& t, ConstMatrixT<Type>& a, const LocalTileIn
     if (!t_size.isEmpty()) {
       auto reduce_t_func = unwrapping([=](auto&& tile_t, auto&& comm_wrapper) {
         auto&& input_t = make_data(tile_t.ptr(t_start), t_size.rows());
-        std::vector<Type> out_data(t_size.rows());
+        std::vector<Type> out_data(to_sizet(t_size.rows()));
         auto&& output_t = make_data(out_data.data(), t_size.rows());
         // TODO reduce just the current, otherwise reduce all together
         reduce(rank_v0.row(), comm_wrapper().colCommunicator(), MPI_SUM, input_t, output_t);
@@ -1347,7 +1347,7 @@ void update_a(const LocalTileIndex at_start, MatrixT<T>& a, ConstMatrixT<T>& x, 
         static_cast<T>(-1), // TODO T must be a signed type
         tile_v.ptr(), tile_v.ld(),
         tile_x.ptr(), tile_x.ld(),
-        static_cast<T>(1),
+        static_cast<typename TypeInfo<T>::BaseType>(1),
         tile_at.ptr(), tile_at.ld());
     // clang-format on
 
