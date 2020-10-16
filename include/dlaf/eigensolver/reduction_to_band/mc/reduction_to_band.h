@@ -893,7 +893,7 @@ void update_trailing_panel(MatrixT<T>& a, const LocalTileIndex ai_start_loc,
           const T fake_v = 1;
           blas::ger(blas::Layout::ColMajor,
               1, pt_size.cols(),
-              -tau,
+              -dlaf::conj(tau),
               &fake_v, 1,
               tile_w.ptr(w_start), tile_w.ld(),
               tile_a.ptr(pt_start), tile_a.ld());
@@ -908,7 +908,7 @@ void update_trailing_panel(MatrixT<T>& a, const LocalTileIndex ai_start_loc,
         // clang-format off
         blas::ger(blas::Layout::ColMajor,
             pt_size.rows(), pt_size.cols(),
-            -tau,
+            -dlaf::conj(tau),
             tile_a.ptr(v_start), 1,
             tile_w.ptr(w_start), tile_w.ld(),
             tile_a.ptr(pt_start), tile_a.ld());
