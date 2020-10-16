@@ -92,7 +92,7 @@ void mirror_on_diag(const Tile<T, Device::CPU>& tile) {
 
   for (SizeType j = 0; j < tile.size().cols(); j++)
     for (SizeType i = j; i < tile.size().rows(); ++i)
-      tile({j, i}) = tile({i, j});
+      tile({j, i}) = dlaf::conj(tile({i, j}));
 }
 
 template <class T>
@@ -102,7 +102,7 @@ void copy_transposed(const Tile<const T, Device::CPU>& from, const Tile<T, Devic
 
   for (SizeType j = 0; j < from.size().cols(); j++)
     for (SizeType i = 0; i < from.size().rows(); ++i)
-      to({j, i}) = from({i, j});
+      to({j, i}) = dlaf::conj(from({i, j}));
 }
 
 // band_size in elements
@@ -304,7 +304,7 @@ TYPED_TEST(ReductionToBandTest, Correctness) {
           // clang-format on
         }
 
-        // Eventaully, check the result obtained by applying the inverse transformation equals the original matrix
+        // Eventually, check the result obtained by applying the inverse transformation equals the original matrix
         for (const auto& index : common::iterate_range2d(reference.distribution().localNrTiles())) {
           const auto global_index = reference.distribution().globalTileIndex(index);
           CHECK_TILE_NEAR(reference.read(index).get(), mat_b(global_index), 1e-3, 1e-3);
