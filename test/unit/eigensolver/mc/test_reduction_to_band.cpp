@@ -305,10 +305,14 @@ TYPED_TEST(ReductionToBandTest, Correctness) {
         }
 
         // Eventually, check the result obtained by applying the inverse transformation equals the original matrix
-        for (const auto& index : common::iterate_range2d(reference.distribution().localNrTiles())) {
-          const auto global_index = reference.distribution().globalTileIndex(index);
-          CHECK_TILE_NEAR(reference.read(index).get(), mat_b(global_index), 1e-3, 1e-3);
-        }
+        auto result = [&dist = reference.distribution(),
+                       &mat_local = mat_b](const GlobalElementIndex& element) {
+          const auto tile_index = dist.globalTileIndex(element);
+          const auto tile_element = dist.tileElementIndex(element);
+          return mat_local(tile_index)(tile_element);
+        };
+        CHECK_MATRIX_NEAR(result, reference, 1e-3, 1e-3);
+
       }
     }
   }
