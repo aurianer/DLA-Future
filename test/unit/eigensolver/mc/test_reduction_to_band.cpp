@@ -305,14 +305,13 @@ TYPED_TEST(ReductionToBandTest, Correctness) {
         }
 
         // Eventually, check the result obtained by applying the inverse transformation equals the original matrix
-        auto result = [&dist = reference.distribution(),
+        auto result = [& dist = reference.distribution(),
                        &mat_local = mat_b](const GlobalElementIndex& element) {
           const auto tile_index = dist.globalTileIndex(element);
           const auto tile_element = dist.tileElementIndex(element);
           return mat_local(tile_index)(tile_element);
         };
         CHECK_MATRIX_NEAR(result, reference, 1e-3, 1e-3);
-
       }
     }
   }

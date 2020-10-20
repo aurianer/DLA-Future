@@ -23,7 +23,7 @@ nb = Ts[0].shape[0]
 print('Ts', Ts)
 print('A\n', A)
 
-H = np.zeros(A.shape)
+H = np.zeros(A.shape, dtype=A.dtype)
 
 for index, j_r in enumerate(range(nb, n, nb)):
     print("new panel", int(j_r/nb)-1)
@@ -54,7 +54,7 @@ for index, j_r in enumerate(range(nb, n, nb)):
     T = Ts[index]
     print('T', T)
     try:
-        for t in range(T.shape[0]): assert(T[t,t] - ts[t] < 1e-3)
+        for t in range(T.shape[0]): assert(abs(T[t,t] - ts[t]) < 1e-3)
     except Exception as e:
         print(e)
         print(ts)
