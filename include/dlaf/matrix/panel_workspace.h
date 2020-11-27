@@ -10,8 +10,8 @@
 #pragma once
 
 #include "dlaf/common/vector.h"
-#include "dlaf/matrix/matrix.h"
 #include "dlaf/matrix/distribution.h"
+#include "dlaf/matrix/matrix.h"
 #include "dlaf/matrix/matrix_base.h"
 #include "dlaf/types.h"
 #include "dlaf/util_matrix.h"

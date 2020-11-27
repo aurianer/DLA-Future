@@ -7,9 +7,9 @@
 #include "dlaf/common/range2d.h"
 #include "dlaf/communication/communicator_grid.h"
 #include "dlaf/communication/init.h"
-#include "dlaf/eigensolver/mc.h"
-#include "dlaf/matrix/matrix.h"
+#include "dlaf/eigensolver/reduction_to_band.h"
 #include "dlaf/matrix/index.h"
+#include "dlaf/matrix/matrix.h"
 #include "dlaf/types.h"
 
 template <class Type>
@@ -39,7 +39,7 @@ int miniapp(hpx::program_options::variables_map& vm) {
 
   print(mat_a, "matA");
 
-  dlaf::EigenSolver<dlaf::Backend::MC>::reduction_to_band(comm_grid, mat_a);
+  dlaf::eigensolver::reductionToBand<dlaf::Backend::MC>(comm_grid, mat_a);
 
   print(mat_a, "Z");
 

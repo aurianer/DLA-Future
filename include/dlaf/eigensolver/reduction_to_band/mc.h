@@ -25,15 +25,23 @@
 #include "dlaf/communication/functions_sync.h"
 #include "dlaf/communication/helpers.h"
 #include "dlaf/lapack_tile.h"
-#include "dlaf/matrix/matrix.h"
 #include "dlaf/matrix/distribution.h"
+#include "dlaf/matrix/matrix.h"
 #include "dlaf/matrix/panel_workspace.h"
 #include "dlaf/matrix/virtual_workspace.h"
 #include "dlaf/util_matrix.h"
 
+#include "dlaf/eigensolver/reduction_to_band/api.h"
+
 namespace dlaf {
+namespace eigensolver {
 namespace internal {
-namespace mc {
+
+template <class T>
+struct ReductionToBand<Backend::MC, Device::CPU, T> {
+  static std::vector<hpx::shared_future<std::vector<T>>> call(comm::CommunicatorGrid grid,
+                                                              Matrix<T, Device::CPU>& mat_a);
+};
 
 namespace {
 
@@ -133,8 +141,8 @@ void update_a(const LocalTileIndex& at_start, MatrixT<T>& a, ConstWorkspaceT<T>&
 /// Distributed implementation of reduction to band
 /// @return a list of shared futures of vectors, where each vector contains a block of taus
 template <class T>
-std::vector<hpx::shared_future<std::vector<T>>> reduction_to_band(comm::CommunicatorGrid grid,
-                                                                  Matrix<T, Device::CPU>& mat_a) {
+std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Device::CPU, T>::call(
+    comm::CommunicatorGrid grid, Matrix<T, Device::CPU>& mat_a) {
   using common::iterate_range2d;
   using common::make_data;
   using hpx::util::unwrapping;
@@ -1278,6 +1286,16 @@ void print_tile(const ConstTileT<Type>& tile) {
   trace(ss.str());
 }
 }
+
+/// ---- ETI
+#define DLAF_EIGENSOLVER_MC_ETI(KWORD, DATATYPE) \
+  KWORD template struct ReductionToBand<Backend::MC, Device::CPU, DATATYPE>;
+
+DLAF_EIGENSOLVER_MC_ETI(extern, float)
+DLAF_EIGENSOLVER_MC_ETI(extern, double)
+DLAF_EIGENSOLVER_MC_ETI(extern, std::complex<float>)
+DLAF_EIGENSOLVER_MC_ETI(extern, std::complex<double>)
+
 }
 }
 }

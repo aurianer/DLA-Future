@@ -9,7 +9,7 @@
 //
 
 #include "dlaf/common/index2d.h"
-#include "dlaf/eigensolver/mc.h"
+#include "dlaf/eigensolver/reduction_to_band.h"
 
 #include <gtest/gtest.h>
 
@@ -20,8 +20,8 @@
 #include "dlaf/communication/communicator_grid.h"
 #include "dlaf/communication/functions_sync.h"
 #include "dlaf/communication/sync/broadcast.h"
-#include "dlaf/matrix/matrix.h"
 #include "dlaf/matrix/copy.h"
+#include "dlaf/matrix/matrix.h"
 #include "dlaf/memory/memory_view.h"
 #include "dlaf/types.h"
 #include "dlaf/util_matrix.h"
@@ -187,7 +187,8 @@ auto all_gather_taus(const SizeType k, const SizeType chunk_size, const SizeType
     else {
       chunk_data.resize(to_sizet(chunk_size));
       broadcast::receive_from(owner, comm_grid.rowCommunicator(),
-                              common::make_data(chunk_data.data(), static_cast<SizeType>(chunk_data.size())));
+                              common::make_data(chunk_data.data(),
+                                                static_cast<SizeType>(chunk_data.size())));
     }
 
     // copy each chunk contiguously
@@ -223,7 +224,7 @@ TYPED_TEST(ReductionToBandTest, Correctness) {
         // Apply reduction-to-band
         DLAF_ASSERT(band_size == matrix_a.blockSize().rows(), "not yet implemented");
 
-        auto local_taus = dlaf::EigenSolver<Backend::MC>::reduction_to_band(comm_grid, matrix_a);
+        auto local_taus = dlaf::eigensolver::reductionToBand<Backend::MC>(comm_grid, matrix_a);
 
         // First basic check: the reduction should not affect the strictly upper part of the input
         auto check_rest_unchanged = [&reference, &matrix_a](const GlobalElementIndex& index) {
