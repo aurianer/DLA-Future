@@ -16,6 +16,7 @@
 #include <hpx/include/util.hpp>
 #include <hpx/tuple.hpp>
 
+#include "dlaf/blas_tile.h"
 #include "dlaf/common/data.h"
 #include "dlaf/common/index2d.h"
 #include "dlaf/common/pipeline.h"
@@ -213,12 +214,7 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
       // setup V0
       if (rank_v0 == rank) {
         auto setup_V0_func = unwrapping([](auto&& tile_v, const auto& tile_a) {
-          // clang-format off
-          lapack::lacpy(lapack::MatrixType::Lower,
-              tile_v.size().rows(), tile_v.size().cols(),
-              tile_a.ptr(), tile_a.ld(),
-              tile_v.ptr(), tile_v.ld());
-          // clang-format on
+          dlaf::tile::lacpy(tile_a, tile_v);
 
           // set upper part to zero and 1 on diagonal (reflectors)
           // clang-format off
@@ -754,12 +750,7 @@ template <class T, class MatrixLikeT>
 void compute_w(WorkspaceT<T>& w, MatrixLikeT& v, ConstMatrixT<T>& t) {
   auto trmm_func =
       hpx::util::unwrapping([](auto&& tile_w, const auto& tile_v, const auto& tile_t) -> void {
-        // clang-format off
-        lapack::lacpy(lapack::MatrixType::General,
-            tile_v.size().rows(), tile_v.size().cols(),
-            tile_v.ptr(), tile_v.ld(),
-            tile_w.ptr(), tile_w.ld());
-        // clang-format on
+        dlaf::tile::lacpy(tile_v, tile_w);
 
         // W = V . T
         // clang-format off
@@ -792,45 +783,6 @@ void compute_x(WorkspaceT<T>& x, const LocalTileSize at_offset, ConstMatrixT<T>&
                ConstWorkspaceT<T>& w) {
   using hpx::util::unwrapping;
 
-  auto hemm_func = unwrapping([](auto&& tile_x, const auto& tile_a, const auto& tile_w) -> void {
-    // clang-format off
-    blas::hemm(blas::Layout::ColMajor,
-        blas::Side::Left, blas::Uplo::Lower,
-        tile_x.size().rows(), tile_a.size().cols(),
-        static_cast<T>(1),
-        tile_a.ptr(), tile_a.ld(),
-        tile_w.ptr(), tile_w.ld(),
-        static_cast<T>(1),
-        tile_x.ptr(), tile_x.ld());
-    // clang-format on
-  });
-
-  auto gemm_a_func = unwrapping([](auto&& tile_x, const auto& tile_a, const auto& tile_w) -> void {
-    // clang-format off
-    blas::gemm(blas::Layout::ColMajor,
-        blas::Op::NoTrans, blas::Op::NoTrans,
-        tile_a.size().rows(), tile_w.size().cols(), tile_a.size().cols(),
-        static_cast<T>(1),
-        tile_a.ptr(), tile_a.ld(),
-        tile_w.ptr(), tile_w.ld(),
-        static_cast<T>(1),
-        tile_x.ptr(), tile_x.ld());
-    // clang-format on
-  });
-
-  auto gemm_b_func = unwrapping([](auto&& tile_x, const auto& tile_a, const auto& tile_w) -> void {
-    // clang-format off
-    blas::gemm(blas::Layout::ColMajor,
-        blas::Op::ConjTrans, blas::Op::NoTrans,
-        tile_a.size().rows(), tile_w.size().cols(), tile_a.size().cols(),
-        static_cast<T>(1),
-        tile_a.ptr(), tile_a.ld(),
-        tile_w.ptr(), tile_w.ld(),
-        static_cast<T>(1),
-        tile_x.ptr(), tile_x.ld());
-    // clang-format on
-  });
-
   const auto dist = a.distribution();
 
   for (SizeType i = at_offset.rows(); i < dist.localNrTiles().rows(); ++i) {
@@ -854,7 +806,9 @@ void compute_x(WorkspaceT<T>& x, const LocalTileSize at_offset, ConstMatrixT<T>&
         FutureConstTile<T>  tile_w = w.read(index_w);
         // clang-format on
 
-        hpx::dataflow(hemm_func, std::move(tile_x), std::move(tile_a), std::move(tile_w));
+        hpx::dataflow(unwrapping(dlaf::tile::hemm<T, Device::CPU>), blas::Side::Left, blas::Uplo::Lower,
+                      static_cast<T>(1), std::move(tile_a), std::move(tile_w), static_cast<T>(1),
+                      std::move(tile_x));
       }
       else {
         // A  . W
@@ -867,7 +821,9 @@ void compute_x(WorkspaceT<T>& x, const LocalTileSize at_offset, ConstMatrixT<T>&
           FutureConstTile<T>  tile_w = w.read(index_a.col());
           // clang-format on
 
-          hpx::dataflow(gemm_a_func, std::move(tile_x), std::move(tile_a), std::move(tile_w));
+          hpx::dataflow(unwrapping(dlaf::tile::gemm<T, Device::CPU>), blas::Op::NoTrans,
+                        blas::Op::NoTrans, static_cast<T>(1), std::move(tile_a), std::move(tile_w),
+                        static_cast<T>(1), std::move(tile_x));
         }
 
         // A* . W
@@ -880,7 +836,9 @@ void compute_x(WorkspaceT<T>& x, const LocalTileSize at_offset, ConstMatrixT<T>&
           FutureConstTile<T>  tile_w = w.read(index_w);
           // clang-format on
 
-          hpx::dataflow(gemm_b_func, std::move(tile_x), std::move(tile_a), std::move(tile_w));
+          hpx::dataflow(unwrapping(dlaf::tile::gemm<T, Device::CPU>), blas::Op::ConjTrans,
+                        blas::Op::NoTrans, static_cast<T>(1), std::move(tile_a), std::move(tile_w),
+                        static_cast<T>(1), std::move(tile_x));
         }
       }
     }
@@ -894,19 +852,6 @@ void compute_w2(MatrixT<T>& w2, ConstWorkspaceT<T>& w, ConstWorkspaceT<T>& x,
   using common::make_data;
   using namespace comm::sync;
 
-  auto gemm_func = unwrapping([](auto&& tile_w2, const auto& tile_w, const auto& tile_x, auto beta) {
-    // clang-format off
-    blas::gemm(blas::Layout::ColMajor,
-        blas::Op::ConjTrans, blas::Op::NoTrans,
-        tile_w2.size().rows(), tile_w2.size().cols(), tile_w.size().cols(),
-        static_cast<T>(1),
-        tile_w.ptr(), tile_w.ld(),
-        tile_x.ptr(), tile_x.ld(),
-        beta,
-        tile_w2.ptr(), tile_w2.ld());
-    // clang-format on
-  });
-
   // GEMM W2 = W* . X
   for (const auto& index_tile : iterate_range2d(w.colNrTiles())) {
     const T beta = (index_tile.row() == 0) ? 0 : 1;
@@ -917,7 +862,8 @@ void compute_w2(MatrixT<T>& w2, ConstWorkspaceT<T>& w, ConstWorkspaceT<T>& x,
     FutureConstTile<T>  tile_x  = x.read(index_tile);
     // clang-format on
 
-    hpx::dataflow(gemm_func, std::move(tile_w2), std::move(tile_w), std::move(tile_x), beta);
+    hpx::dataflow(unwrapping(dlaf::tile::gemm<T, Device::CPU>), blas::Op::ConjTrans, blas::Op::NoTrans,
+                  static_cast<T>(1), std::move(tile_w), std::move(tile_x), beta, std::move(tile_w2));
   }
 
   // all-reduce instead of computing it on each node, everyone in the panel should have it
@@ -935,19 +881,6 @@ void update_x(WorkspaceT<T>& x, ConstMatrixT<T>& w2, MatrixLikeT& v) {
   using hpx::util::unwrapping;
 
   // GEMM X = X - 0.5 . V . W2
-  auto gemm_func = unwrapping([](auto&& tile_x, const auto& tile_v, const auto& tile_w2) -> void {
-    // clang-format off
-    blas::gemm(blas::Layout::ColMajor,
-        blas::Op::NoTrans, blas::Op::NoTrans,
-        tile_x.size().rows(), tile_x.size().cols(), tile_v.size().cols(),
-        static_cast<T>(-0.5), // FIXME T must be a signed type
-        tile_v.ptr(), tile_v.ld(),
-        tile_w2.ptr(), tile_w2.ld(),
-        static_cast<T>(1),
-        tile_x.ptr(), tile_x.ld());
-    // clang-format on
-  });
-
   for (const auto& index_row : iterate_range2d(v.colNrTiles())) {
     // clang-format off
     FutureTile<T>       tile_x  = x(index_row);
@@ -955,7 +888,9 @@ void update_x(WorkspaceT<T>& x, ConstMatrixT<T>& w2, MatrixLikeT& v) {
     FutureConstTile<T>  tile_w2 = w2.read(LocalTileIndex{0, 0});
     // clang-format on
 
-    hpx::dataflow(gemm_func, std::move(tile_x), std::move(tile_v), std::move(tile_w2));
+    hpx::dataflow(unwrapping(dlaf::tile::gemm<T, Device::CPU>), blas::Op::NoTrans, blas::Op::NoTrans,
+                  static_cast<T>(-0.5), std::move(tile_v), std::move(tile_w2), static_cast<T>(1),
+                  std::move(tile_x));
   }
 }
 
@@ -963,45 +898,6 @@ template <class T>
 void update_a(const LocalTileIndex& at_start, MatrixT<T>& a, ConstWorkspaceT<T>& x,
               ConstWorkspaceT<T>& v) {
   using hpx::util::unwrapping;
-
-  auto her2k_func = unwrapping([](auto&& tile_at, const auto& tile_v, const auto& tile_x) -> void {
-    // clang-format off
-    blas::her2k(blas::Layout::ColMajor,
-        blas::Uplo::Lower, blas::Op::NoTrans,
-        tile_at.size().rows(), tile_v.size().cols(),
-        static_cast<T>(-1), // TODO T must be a signed type
-        tile_v.ptr(), tile_v.ld(),
-        tile_x.ptr(), tile_x.ld(),
-        static_cast<typename TypeInfo<T>::BaseType>(1),
-        tile_at.ptr(), tile_at.ld());
-    // clang-format on
-  });
-
-  auto gemm_a_func = unwrapping([](auto&& tile_at, const auto& tile_x, const auto& tile_v) -> void {
-    // clang-format off
-    blas::gemm(blas::Layout::ColMajor,
-        blas::Op::NoTrans, blas::Op::ConjTrans,
-        tile_at.size().rows(), tile_at.size().cols(), tile_x.size().rows(),
-        static_cast<T>(-1), // TODO T must be a signed type
-        tile_x.ptr(), tile_x.ld(),
-        tile_v.ptr(), tile_v.ld(),
-        static_cast<T>(1),
-        tile_at.ptr(), tile_at.ld());
-    // clang-format on
-  });
-
-  auto gemm_b_func = unwrapping([](auto&& tile_at, const auto& tile_v, const auto& tile_x) -> void {
-    // clang-format off
-    blas::gemm(blas::Layout::ColMajor,
-        blas::Op::NoTrans, blas::Op::ConjTrans,
-        tile_at.size().rows(), tile_at.size().cols(), tile_x.size().rows(),
-        static_cast<T>(-1), // TODO check this + FIXME T must be a signed type
-        tile_v.ptr(), tile_v.ld(),
-        tile_x.ptr(), tile_x.ld(),
-        static_cast<T>(1),
-        tile_at.ptr(), tile_at.ld());
-    // clang-format on
-  });
 
   const auto dist = a.distribution();
 
@@ -1024,7 +920,10 @@ void update_a(const LocalTileIndex& at_start, MatrixT<T>& a, ConstWorkspaceT<T>&
         FutureConstTile<T>  tile_x = x.read(index_x);
         // clang-format on
 
-        hpx::dataflow(her2k_func, std::move(tile_a), std::move(tile_v), std::move(tile_x));
+        const T alpha = -1;  // TODO T must be a signed type
+        hpx::dataflow(unwrapping(dlaf::tile::her2k<T, Device::CPU>), blas::Uplo::Lower,
+                      blas::Op::NoTrans, alpha, std::move(tile_v), std::move(tile_x),
+                      static_cast<typename TypeInfo<T>::BaseType>(1), std::move(tile_a));
       }
       else {
         // GEMM A: X . V*
@@ -1037,7 +936,10 @@ void update_a(const LocalTileIndex& at_start, MatrixT<T>& a, ConstWorkspaceT<T>&
           FutureConstTile<T>  tile_v = v.read(index_a.col());
           // clang-format on
 
-          hpx::dataflow(gemm_a_func, std::move(tile_a), std::move(tile_x), tile_v);
+          const T alpha = -1;  // TODO T must be a sigend type
+          hpx::dataflow(unwrapping(dlaf::tile::gemm<T, Device::CPU>), blas::Op::NoTrans,
+                        blas::Op::ConjTrans, alpha, std::move(tile_x), std::move(tile_v),
+                        static_cast<T>(1), std::move(tile_a));
         }
 
         // GEMM A: V . X*
@@ -1048,7 +950,10 @@ void update_a(const LocalTileIndex& at_start, MatrixT<T>& a, ConstWorkspaceT<T>&
           FutureConstTile<T>  tile_x = x.read(index_a.col());
           // clang-format on
 
-          hpx::dataflow(gemm_b_func, tile_a, tile_v, tile_x);
+          const T alpha = -1;  // TODO T must be a sigend type
+          hpx::dataflow(unwrapping(dlaf::tile::gemm<T, Device::CPU>), blas::Op::NoTrans,
+                        blas::Op::ConjTrans, alpha, std::move(tile_v), std::move(tile_x),
+                        static_cast<T>(1), std::move(tile_a));
         }
       }
     }
