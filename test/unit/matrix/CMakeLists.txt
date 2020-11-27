@@ -52,7 +52,6 @@ DLAF_addTest(test_matrix_view
   USE_MAIN MPIHPX
   MPIRANKS 6
 )
-
 DLAF_addTest(test_util_matrix
   SOURCES test_util_matrix.cpp
   LIBRARIES dlaf.core
@@ -66,3 +65,18 @@ DLAF_addTest(test_matrix_output
   USE_MAIN MPIHPX
   MPIRANKS 6
 )
+
+DLAF_addTest(test_panel_workspace
+  SOURCES test_panel_workspace.cpp
+  LIBRARIES dlaf.core
+  USE_MAIN MPIHPX
+  MPIRANKS 1
+)
+
+DLAF_addTest(test_virtual_workspace
+  SOURCES test_virtual_workspace.cpp
+  LIBRARIES dlaf.core
+  USE_MAIN MPIHPX
+  MPIRANKS 6
+)
+

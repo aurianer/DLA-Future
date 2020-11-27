@@ -23,9 +23,12 @@
 #include "dlaf/common/vector.h"
 #include "dlaf/communication/communicator_grid.h"
 #include "dlaf/communication/functions_sync.h"
+#include "dlaf/communication/helpers.h"
 #include "dlaf/lapack_tile.h"
 #include "dlaf/matrix/matrix.h"
 #include "dlaf/matrix/distribution.h"
+#include "dlaf/matrix/panel_workspace.h"
+#include "dlaf/matrix/virtual_workspace.h"
 #include "dlaf/util_matrix.h"
 
 namespace dlaf {
@@ -40,19 +43,21 @@ using matrix::Tile;
 template <class Type>
 using MatrixT = Matrix<Type, Device::CPU>;
 template <class Type>
-using ConstMatrixT = Matrix<const Type, Device::CPU>;
+using ConstMatrixT = MatrixT<const Type>;
 template <class Type>
 using TileT = Tile<Type, Device::CPU>;
 template <class Type>
-using ConstTileT = Tile<const Type, Device::CPU>;
+using ConstTileT = TileT<const Type>;
+
+template <class Type>
+using WorkspaceT = matrix::VirtualWorkspace<Type, Device::CPU>;
+template <class Type>
+using ConstWorkspaceT = WorkspaceT<Type>;
 
 template <class Type>
 using FutureTile = hpx::future<TileT<Type>>;
 template <class Type>
 using FutureConstTile = hpx::shared_future<ConstTileT<Type>>;
-
-template <class Type>
-using FutureConstPanel = common::internal::vector<FutureConstTile<Type>>;
 
 template <class Type>
 using MemViewT = memory::MemoryView<Type, Device::CPU>;
@@ -73,7 +78,7 @@ template <class T, class... Ts>
 void trace(T&& arg, Ts&&... args) {
   std::cout << arg << " ";
   trace(args...);
-};
+}
 #else
 template <class... Ts>
 void trace(Ts&&...) {}
@@ -83,53 +88,6 @@ template <class Type>
 void set_to_zero(MatrixT<Type>& matrix) {
   dlaf::matrix::util::set(matrix, [](...) { return 0; });
 }
-
-struct row_wise {};
-struct col_wise {};
-
-auto broadcast_task_send_impl(row_wise) {
-  using namespace comm::sync;
-  using common::make_data;
-
-  return [](const auto& source, auto&& comm_wrapper) {
-    broadcast::send(comm_wrapper.ref().rowCommunicator(), make_data(source));
-  };
-}
-
-auto broadcast_task_send_impl(col_wise) {
-  using namespace comm::sync;
-  using common::make_data;
-
-  return [](const auto& source, auto&& comm_wrapper) {
-    broadcast::send(comm_wrapper.ref().colCommunicator(), make_data(source));
-  };
-}
-
-auto broadcast_task_recv_impl(row_wise, const comm::IndexT_MPI rank) {
-  using namespace comm::sync;
-  using common::make_data;
-
-  return [=](auto&& dest, auto&& comm_wrapper) {
-    broadcast::receive_from(rank, comm_wrapper.ref().rowCommunicator(), make_data(dest));
-  };
-}
-
-auto broadcast_task_recv_impl(col_wise, const comm::IndexT_MPI rank) {
-  using namespace comm::sync;
-  using common::make_data;
-
-  return [=](auto&& dest, auto&& comm_wrapper) {
-    broadcast::receive_from(rank, comm_wrapper.ref().colCommunicator(), make_data(dest));
-  };
-}
-
-auto broadcast_send = [](auto&& row_or_col) {
-  return hpx::util::unwrapping(broadcast_task_send_impl(row_or_col));
-};
-
-auto broadcast_recv = [](auto&& row_or_col, const comm::IndexT_MPI rank) {
-  return hpx::util::unwrapping(broadcast_task_recv_impl(row_or_col, rank));
-};
 
 template <class T>
 hpx::shared_future<T> compute_reflector(MatrixT<T>& a, const LocalTileIndex ai_start_loc,
@@ -150,25 +108,26 @@ void compute_t_factor(MatrixT<Type>& t, ConstMatrixT<Type>& a, const LocalTileIn
                       common::internal::vector<hpx::shared_future<Type>> taus,
                       common::Pipeline<comm::CommunicatorGrid>& serial_comm);
 
-template <class T>
-void compute_w(MatrixT<T>& w, FutureConstPanel<T> v, ConstMatrixT<T>& t);
+template <class T, class MatrixLikeT>
+void compute_w(WorkspaceT<T>& w, MatrixLikeT& v, ConstMatrixT<T>& t);
 
 // TODO document that it stores in Xcols just the ones for which he is not on the right row,
 // otherwise it directly compute also gemm2 inside Xrows
 template <class T>
-void compute_x(MatrixT<T>& x, MatrixT<T>& x_tmp, const LocalTileSize at_offset, ConstMatrixT<T>& a,
-               ConstMatrixT<T>& w, ConstMatrixT<T>& w_tmp);
+void compute_x(WorkspaceT<T>& x, const LocalTileSize at_offset, ConstMatrixT<T>& a,
+               ConstWorkspaceT<T>& w);
 
+// TODO x just column access
 template <class T>
-void compute_w2(MatrixT<T>& w2, ConstMatrixT<T>& w, ConstMatrixT<T>& x,
+void compute_w2(MatrixT<T>& w2, ConstWorkspaceT<T>& w, ConstWorkspaceT<T>& x,
                 common::Pipeline<comm::CommunicatorGrid>& serial_comm);
 
-template <class T>
-void update_x(MatrixT<T>& x, ConstMatrixT<T>& w2, FutureConstPanel<T> v);
+template <class T, class MatrixLikeT>
+void update_x(WorkspaceT<T>& x, ConstMatrixT<T>& w2, MatrixLikeT& v);
 
 template <class T>
-void update_a(const LocalTileIndex at_start, MatrixT<T>& a, ConstMatrixT<T>& x, ConstMatrixT<T>& x_tmp,
-              FutureConstPanel<T> v, FutureConstPanel<T> v_tmp);
+void update_a(const LocalTileIndex& at_start, MatrixT<T>& a, ConstWorkspaceT<T>& x,
+              ConstWorkspaceT<T>& v);
 }
 
 /// Distributed implementation of reduction to band
@@ -226,6 +185,8 @@ std::vector<hpx::shared_future<std::vector<T>>> reduction_to_band(comm::Communic
     print(mat_a, std::string("A_input") + std::to_string(j_panel));
 
     const bool is_panel_rank_col = rank_v0.col() == rank.col();
+
+    WorkspaceT<T> v(dist, dist_col, dist_row, at_offset);
 
     // 1. PANEL
     if (is_panel_rank_col) {
@@ -291,9 +252,16 @@ std::vector<hpx::shared_future<std::vector<T>>> reduction_to_band(comm::Communic
               tile_v.ptr(), tile_v.ld());
           // clang-format on
         });
-        hpx::dataflow(setup_V0_func, v0(LocalTileIndex{0, 0}), mat_a.read(Ai_start));
 
-        print(v0, std::string("V0_") + std::to_string(j_panel));
+        hpx::dataflow(setup_V0_func, v(LocalTileIndex{0, 0}), mat_a.read(Ai_start));
+      }
+
+      // setup workspace mask
+      for (const auto& index : iterate_range2d(v.colNrTiles())) {
+        if (index == LocalTileIndex{0, 0} && rank_v0 == rank)
+          continue;  // TODO this can be a bug of panel_workspace (loop future)
+
+        v.set_tile(index, mat_a.read(index + ai_offset));
       }
     }
 
@@ -313,138 +281,22 @@ std::vector<hpx::shared_future<std::vector<T>>> reduction_to_band(comm::Communic
       print(t, std::string("T") + std::to_string(j_panel), true);
     }
 
-    // Here two things are being done:
-    // - letting each rank of the row get the V tile of the row they belong to
-    // - setting up an easy and uniform access to V tiles through a vector
-    //
-    // The former step sees the column of ranks owning the Ai panel to send their tiles row-wise.
-    //
-    // The latter step is needed because reflector components are stored in the original matrix
-    // but the first tile V0 has to be stored away (see V0 setup above)
-    MatrixT<T> mat_v(dist_col);
-    FutureConstPanel<T> v(Ai_size.rows());
-
-    // TODO Avoid useless communication
-    for (const auto& index_v : iterate_range2d(dist_col.localNrTiles())) {
-      FutureConstTile<T> tile_v;
-
-      if (is_panel_rank_col) {
-        const auto local_v_wrt_a = index_v + ai_offset;
-        const SizeType row_v_wrt_a =
-            dist.template globalTileFromLocalTile<Coord::Row>(local_v_wrt_a.row());
-
-        const bool is_v0_tile = (row_v_wrt_a == Ai_start_global.row());
-
-        if (is_v0_tile)
-          tile_v = v0.read(LocalTileIndex{0, 0});
-        else
-          tile_v = mat_a.read(local_v_wrt_a);
-
-        hpx::dataflow(broadcast_send(row_wise{}), tile_v, serial_comm());
-      }
-      else {
-        hpx::dataflow(broadcast_recv(row_wise{}, rank_v0.col()), mat_v(index_v), serial_comm());
-
-        tile_v = mat_v.read(index_v);
-      }
-
-      v[index_v.row()] = tile_v;
-    }
-
-    DLAF_ASSERT_HEAVY(Ai_size.rows() == v.size(), Ai_size.rows(), v.size());
-
-    // Here we are setting up the "transposed" version of V, the panel with reflectors tiles
-    // v_tmp is not transposed in values, it is just a way to quickly and easily reference
-    // the tile at the row, through the transposed column coordinate
-    //
-    // It exploits the fact that each rank already received the V of its row, so each one acts
-    // as owner of the row info for its column
-    //
-    // Morevoer, also in this case an easy access to the tile is provided through a vector.
-    // This allows to uniformly access the right tile just by giving the transposed column
-    // coordinate, without carying whether it is stored in the mat_v_tmp workspace or not
-    MatrixT<T> mat_v_tmp(dist_row);
-    FutureConstPanel<T> v_tmp(at_localsize.cols());
-
-    // TODO Avoid useless communication
-    for (const auto& index_v : iterate_range2d(dist_row.localNrTiles())) {
-      const SizeType local_col_v_wrt_a = (index_v + at_offset).col();
-      const auto col_v_wrt_a = dist.template globalTileFromLocalTile<Coord::Col>(local_col_v_wrt_a);
-
-      // here the matching between transposed column and row is done,
-      // in addition to exploiting that the entire row owns the same information
-      const IndexT_MPI row_rank_owner = dist.template rankGlobalTile<Coord::Row>(col_v_wrt_a);
-
-      FutureConstTile<T> tile_v;
-
-      if (row_rank_owner == rank.row()) {
-        const SizeType row_v_owner =
-            dist.template localTileFromGlobalTile<Coord::Row>(col_v_wrt_a) - at_offset.rows();
-        tile_v = v[row_v_owner];
-
-        hpx::dataflow(broadcast_send(col_wise{}), tile_v, serial_comm());
-      }
-      else {
-        hpx::dataflow(broadcast_recv(col_wise{}, row_rank_owner), mat_v_tmp(index_v), serial_comm());
-
-        tile_v = mat_v_tmp.read(index_v);
-      }
-
-      v_tmp[index_v.col()] = tile_v;
-    }
-
-    DLAF_ASSERT_HEAVY(at_localsize.cols() == v_tmp.size(), at_localsize.cols(), v_tmp.size());
-
-    print(mat_v_tmp, "Vcols");
+    matrix::populate(comm::row_wise{}, v, rank_v0.col(), serial_comm);
+    matrix::populate(comm::col_wise{}, v, serial_comm);
 
     // 3 UPDATE TRAILING MATRIX
     trace(">>> UPDATE TRAILING MATRIX", j_panel);
     trace(">>> At", at_localsize, At_start);
 
     // 3A COMPUTE W
-    // Just the column of ranks owning the Ai panel, compute the W
-    MatrixT<T> w(dist_col);
+    WorkspaceT<T> w(dist, dist_col, dist_row, at_offset);
+
     if (is_panel_rank_col)
       compute_w(w, v, t);  // TRMM W = V . T
 
-    // Then it is broadcasted as before, both row-wise ...
-    for (const auto& index_w_loc : iterate_range2d(dist_col.localNrTiles()))
-      if (is_panel_rank_col)
-        hpx::dataflow(broadcast_send(row_wise{}), w.read(index_w_loc), serial_comm());
-      else
-        hpx::dataflow(broadcast_recv(row_wise{}, rank_v0.col()), w(index_w_loc), serial_comm());
+    matrix::populate(comm::row_wise{}, w, rank_v0.col(), serial_comm);
 
-    // ... and column-wise
-    // Again, this uses the same concept as before for v_tmp.
-    MatrixT<T> w_tmp(dist_row);
-    set_to_zero(w_tmp);  // TODO superflous? if it is not used here, it will not be used later?
-
-    // TODO evaluate to source-mask also here
-    for (const auto& index_w : iterate_range2d(dist_row.localNrTiles())) {
-      const SizeType local_col_w_wrt_a = (index_w + at_offset).col();
-      const SizeType col_w_wrt_a = dist.template globalTileFromLocalTile<Coord::Col>(local_col_w_wrt_a);
-
-      const IndexT_MPI row_rank_owner = dist.template rankGlobalTile<Coord::Row>(col_w_wrt_a);
-
-      if (row_rank_owner == rank.row()) {
-        const LocalTileIndex index_w_owner{dist.template localTileFromGlobalTile<Coord::Row>(
-                                               col_w_wrt_a) -
-                                               at_offset.rows(),
-                                           0};
-
-        FutureConstTile<T> tile_w = w.read(index_w_owner);
-
-        hpx::dataflow(broadcast_send(col_wise{}), std::move(tile_w), serial_comm());
-      }
-      else {
-        FutureTile<T> tile_w = w_tmp(index_w);
-
-        hpx::dataflow(broadcast_recv(col_wise{}, row_rank_owner), std::move(tile_w), serial_comm());
-      }
-    }
-
-    print(w, "W");
-    print(w_tmp, "W_conj");
+    matrix::populate(comm::col_wise{}, w, serial_comm);
 
     // 3B COMPUTE X
 
@@ -452,18 +304,12 @@ std::vector<hpx::shared_future<std::vector<T>>> reduction_to_band(comm::Communic
     // When the tile is not part of the main diagonal, the same tile has to be used for two computations
     // that will contribute to two different rows of X: the ones indexed with row and col.
     // This is achieved by storing the two results in two different workspaces: X and X_conj respectively.
-    MatrixT<T> x({(at_localsize.rows() != 0 ? at_localsize.rows() : 1) * nb, nb}, dist.blockSize());
-    MatrixT<T> x_tmp({nb, (at_localsize.cols() != 0 ? at_localsize.cols() : 1) * nb}, dist.blockSize());
+    WorkspaceT<T> x(dist, dist_col, dist_row, at_offset);
 
-    // TODO maybe it may be enough doing it if (At_size.isEmpty())
-    set_to_zero(x);
-    set_to_zero(x_tmp);
+    // TODO maybe it may be enough to set_to_zero (At_size.isEmpty())
 
     // HEMM X = At . W
-    compute_x(x, x_tmp, at_offset, mat_a, w, w_tmp);
-
-    print(x, "Xpre-rows");
-    print(x_tmp, "Xpre-cols");
+    compute_x(x, at_offset, mat_a, w);
 
     // X has to be reduce by row-wise and col-wise, and the final result will be available just on the Ai panel column
 
@@ -510,13 +356,11 @@ std::vector<hpx::shared_future<std::vector<T>>> reduction_to_band(comm::Communic
                  make_data(&fake, 0));
         });
 
-        FutureConstTile<T> tile_x = x_tmp.read(index_x);
+        FutureConstTile<T> tile_x = x.read(index_x_row);
 
         hpx::dataflow(reduce_x_func, std::move(tile_x), serial_comm());
       }
     }
-
-    print(x, "Xint");
 
     /// ... and reduce X col-wise
     auto reduce_x_func = unwrapping([rank_v0](auto&& tile_x, auto&& comm_wrapper) {
@@ -531,8 +375,6 @@ std::vector<hpx::shared_future<std::vector<T>>> reduction_to_band(comm::Communic
     // Now the intermediate result for X is available on the panel column rank,
     // which has locally all the needed stuff for updating X and finalize the result
     if (is_panel_rank_col) {
-      print(x, "Xpre");
-
       // 3C COMPUTE W2
       // W2 can be computed by the panel column rank only, it is the only one that has the X
       MatrixT<T> w2 = std::move(t);
@@ -545,8 +387,6 @@ std::vector<hpx::shared_future<std::vector<T>>> reduction_to_band(comm::Communic
 
       // 3D UPDATE X
       update_x(x, w2, v);
-
-      print(x, "X");
     }
 
     // The finalized X result has to be known by everyone, since it will be used by all ranks
@@ -557,48 +397,15 @@ std::vector<hpx::shared_future<std::vector<T>>> reduction_to_band(comm::Communic
     // This means that even in this case, as we did before for other workspaces, each row must know
     // the X tile of the row they belong to, in addition to the X tile of the equivalent transposed column
 
-    // So, broadcast X row-wise...
-    for (const auto& index_x : iterate_range2d(x.distribution().localNrTiles()))
-      if (is_panel_rank_col)
-        hpx::dataflow(broadcast_send(row_wise{}), x.read(index_x), serial_comm());
-      else
-        hpx::dataflow(broadcast_recv(row_wise{}, rank_v0.col()), x(index_x), serial_comm());
+    matrix::populate(comm::row_wise{}, x, rank_v0.col(), serial_comm);
 
-    // ... and broadcast X col-wise
-    for (const auto& index_x : iterate_range2d(dist_row.localNrTiles())) {
-      const auto col_x_wrt_a =
-          dist.template globalTileFromLocalTile<Coord::Col>((index_x + at_offset).col());
-
-      const auto rank_owner = dist.template rankGlobalTile<Coord::Row>(col_x_wrt_a);
-
-      if (rank_owner == rank.row()) {
-        const LocalTileIndex row_x_owner{dist.template localTileFromGlobalTile<Coord::Row>(col_x_wrt_a) -
-                                             at_offset.rows(),
-                                         0};
-
-        hpx::dataflow(broadcast_send(col_wise{}), x(row_x_owner), serial_comm());
-      }
-      else {
-        hpx::dataflow(broadcast_recv(col_wise{}, rank_owner), x_tmp(index_x), serial_comm());
-      }
-    }
-
-    print(x, "Xrows");
-    print(x_tmp, "Xcols");
+    matrix::populate(comm::col_wise{}, x, serial_comm);
 
     // 3E UPDATE
     trace("At", At_start, "size:", at_localsize);
 
-    trace("Vrows");
-    for (const auto& tile_v_fut : v)
-      print_tile(tile_v_fut.get());
-
-    trace("Vcols");
-    for (const auto& tile_vcols_fut : v_tmp)
-      print_tile(tile_vcols_fut.get());
-
     // HER2K At = At - X . V* + V . X*
-    update_a(At_start, mat_a, x, x_tmp, v, v_tmp);
+    update_a(At_start, mat_a, x, v);
   }
 
   return taus;
@@ -1043,8 +850,8 @@ void compute_t_factor(MatrixT<Type>& t, ConstMatrixT<Type>& a, const LocalTileIn
   }
 }
 
-template <class T>
-void compute_w(MatrixT<T>& w, FutureConstPanel<T> v, ConstMatrixT<T>& t) {
+template <class T, class MatrixLikeT>
+void compute_w(WorkspaceT<T>& w, MatrixLikeT& v, ConstMatrixT<T>& t) {
   auto trmm_func =
       hpx::util::unwrapping([](auto&& tile_w, const auto& tile_v, const auto& tile_t) -> void {
         // clang-format off
@@ -1065,14 +872,12 @@ void compute_w(MatrixT<T>& w, FutureConstPanel<T> v, ConstMatrixT<T>& t) {
         // clang-format on
       });
 
-  const LocalTileSize Wpanel_size = w.distribution().localNrTiles();
+  const LocalTileSize Wpanel_size = w.colNrTiles();
 
   for (const LocalTileIndex& index_tile_w : iterate_range2d(Wpanel_size)) {
-    const SizeType index_v = index_tile_w.row();
-
     // clang-format off
     FutureTile<T>      tile_w = w(index_tile_w);
-    FutureConstTile<T> tile_v = v[index_v];
+    FutureConstTile<T> tile_v = v.read(index_tile_w);
     FutureConstTile<T> tile_t = t.read(LocalTileIndex{0, 0});
     // clang-format on
 
@@ -1083,8 +888,8 @@ void compute_w(MatrixT<T>& w, FutureConstPanel<T> v, ConstMatrixT<T>& t) {
 // TODO document that it stores in Xcols just the ones for which he is not on the right row,
 // otherwise it directly compute also gemm2 inside Xrows
 template <class T>
-void compute_x(MatrixT<T>& x, MatrixT<T>& x_tmp, const LocalTileSize at_offset, ConstMatrixT<T>& a,
-               ConstMatrixT<T>& w, ConstMatrixT<T>& w_tmp) {
+void compute_x(WorkspaceT<T>& x, const LocalTileSize at_offset, ConstMatrixT<T>& a,
+               ConstWorkspaceT<T>& w) {
   using hpx::util::unwrapping;
 
   auto hemm_func = unwrapping([](auto&& tile_x, const auto& tile_a, const auto& tile_w) -> void {
@@ -1163,7 +968,6 @@ void compute_x(MatrixT<T>& x, MatrixT<T>& x_tmp, const LocalTileSize at_offset, 
   });
 
   const auto dist = a.distribution();
-  const comm::Index2D rank = dist.rankIndex();
 
   for (SizeType i = at_offset.rows(); i < dist.localNrTiles().rows(); ++i) {
     const auto limit = dist.template nextLocalTileFromGlobalTile<Coord::Col>(
@@ -1196,25 +1000,8 @@ void compute_x(MatrixT<T>& x, MatrixT<T>& x_tmp, const LocalTileSize at_offset, 
           // clang-format off
           FutureTile<T>       tile_x = x(index_x);
           FutureConstTile<T>  tile_a = a.read(index_at_wrt_a);
-          FutureConstTile<T>  tile_w;
+          FutureConstTile<T>  tile_w = w.read(index_a.col());
           // clang-format on
-
-          const bool own_w = rank.row() == dist.template rankGlobalTile<Coord::Row>(index_a.col());
-          if (own_w) {
-            const SizeType index_a_row =
-                dist.template localTileFromGlobalTile<Coord::Row>(index_a.col());
-            const LocalTileIndex index_w{index_a_row - at_offset.rows(), 0};
-
-            tile_w = w.read(index_w);
-          }
-          else {
-            const SizeType index_tmp = dist.template localTileFromGlobalTile<Coord::Col>(index_a.col());
-            const LocalTileIndex index_tile_w{0, index_tmp - at_offset.cols()};
-            DLAF_ASSERT(index_tmp == index_at_wrt_a.col(),
-                        "");  // TODO if this is true, index_tmp can be replaced
-
-            tile_w = w_tmp.read(index_tile_w);
-          }
 
           hpx::dataflow(gemm_a_func, std::move(tile_x), std::move(tile_a), std::move(tile_w));
         }
@@ -1224,24 +1011,12 @@ void compute_x(MatrixT<T>& x, MatrixT<T>& x_tmp, const LocalTileSize at_offset, 
           const LocalTileIndex index_w{index_at_wrt_a.row() - at_offset.rows(), 0};
 
           // clang-format off
+          FutureTile<T>       tile_x = x(index_a.col());
           FutureConstTile<T>  tile_a = a.read(index_at_wrt_a);
           FutureConstTile<T>  tile_w = w.read(index_w);
-          FutureTile<T>       tile_x_h;
           // clang-format on
 
-          // if it will be reduced on itself, just add it now
-          const bool own_x = rank.row() == dist.template rankGlobalTile<Coord::Row>(index_a.col());
-          if (own_x) {
-            const SizeType index_tmp = dist.template localTileFromGlobalTile<Coord::Row>(index_a.col());
-            const LocalTileIndex index_x_h{index_tmp - at_offset.rows(), 0};
-            tile_x_h = x(index_x_h);
-          }
-          else {
-            const LocalTileIndex index_x_h{0, index_at_wrt_a.col() - at_offset.cols()};
-            tile_x_h = x_tmp(index_x_h);
-          }
-
-          hpx::dataflow(gemm_b_func, std::move(tile_x_h), std::move(tile_a), std::move(tile_w));
+          hpx::dataflow(gemm_b_func, std::move(tile_x), std::move(tile_a), std::move(tile_w));
         }
       }
     }
@@ -1249,7 +1024,7 @@ void compute_x(MatrixT<T>& x, MatrixT<T>& x_tmp, const LocalTileSize at_offset, 
 }
 
 template <class T>
-void compute_w2(MatrixT<T>& w2, ConstMatrixT<T>& w, ConstMatrixT<T>& x,
+void compute_w2(MatrixT<T>& w2, ConstWorkspaceT<T>& w, ConstWorkspaceT<T>& x,
                 common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
   using hpx::util::unwrapping;
   using common::make_data;
@@ -1271,7 +1046,7 @@ void compute_w2(MatrixT<T>& w2, ConstMatrixT<T>& w, ConstMatrixT<T>& x,
   });
 
   // GEMM W2 = W* . X
-  for (const auto& index_tile : iterate_range2d(w.distribution().localNrTiles())) {
+  for (const auto& index_tile : iterate_range2d(w.colNrTiles())) {
     const T beta = (index_tile.row() == 0) ? 0 : 1;
 
     // clang-format off
@@ -1293,8 +1068,8 @@ void compute_w2(MatrixT<T>& w2, ConstMatrixT<T>& w, ConstMatrixT<T>& x,
   hpx::dataflow(std::move(all_reduce_w2), std::move(tile_w2), serial_comm());
 }
 
-template <class T>
-void update_x(MatrixT<T>& x, ConstMatrixT<T>& w2, FutureConstPanel<T> v) {
+template <class T, class MatrixLikeT>
+void update_x(WorkspaceT<T>& x, ConstMatrixT<T>& w2, MatrixLikeT& v) {
   using hpx::util::unwrapping;
 
   // GEMM X = X - 0.5 . V . W2
@@ -1313,12 +1088,10 @@ void update_x(MatrixT<T>& x, ConstMatrixT<T>& w2, FutureConstPanel<T> v) {
     // clang-format on
   });
 
-  for (SizeType i = 0; i < v.size(); ++i) {
-    const LocalTileIndex index_tile_x{i, 0};
-
+  for (const auto& index_row : iterate_range2d(v.colNrTiles())) {
     // clang-format off
-    FutureTile<T>       tile_x  = x(index_tile_x);
-    FutureConstTile<T>  tile_v  = v[i];
+    FutureTile<T>       tile_x  = x(index_row);
+    FutureConstTile<T>  tile_v  = v.read(index_row);
     FutureConstTile<T>  tile_w2 = w2.read(LocalTileIndex{0, 0});
     // clang-format on
 
@@ -1327,8 +1100,8 @@ void update_x(MatrixT<T>& x, ConstMatrixT<T>& w2, FutureConstPanel<T> v) {
 }
 
 template <class T>
-void update_a(const LocalTileIndex at_start, MatrixT<T>& a, ConstMatrixT<T>& x, ConstMatrixT<T>& x_tmp,
-              FutureConstPanel<T> v, FutureConstPanel<T> v_tmp) {
+void update_a(const LocalTileIndex& at_start, MatrixT<T>& a, ConstWorkspaceT<T>& x,
+              ConstWorkspaceT<T>& v) {
   using hpx::util::unwrapping;
 
   auto her2k_func = unwrapping([](auto&& tile_at, const auto& tile_v, const auto& tile_x) -> void {
@@ -1413,7 +1186,6 @@ void update_a(const LocalTileIndex at_start, MatrixT<T>& a, ConstMatrixT<T>& x, 
   });
 
   const auto dist = a.distribution();
-  const comm::Index2D rank = dist.rankIndex();
 
   for (SizeType i = at_start.row(); i < dist.localNrTiles().rows(); ++i) {
     const auto limit = dist.template nextLocalTileFromGlobalTile<Coord::Col>(
@@ -1426,12 +1198,11 @@ void update_a(const LocalTileIndex at_start, MatrixT<T>& a, ConstMatrixT<T>& x, 
 
       if (is_diagonal_tile) {
         // HER2K
-        const SizeType index_v{index_at.row() - at_start.row()};
         const LocalTileIndex index_x{index_at.row() - at_start.row(), 0};
 
         // clang-format off
         FutureTile<T>       tile_a = a(index_at);
-        FutureConstTile<T>  tile_v = v[index_v];
+        FutureConstTile<T>  tile_v = v.read(index_x);
         FutureConstTile<T>  tile_x = x.read(index_x);
         // clang-format on
 
@@ -1445,41 +1216,19 @@ void update_a(const LocalTileIndex at_start, MatrixT<T>& a, ConstMatrixT<T>& x, 
           // clang-format off
           FutureTile<T>       tile_a = a(index_at);
           FutureConstTile<T>  tile_x = x.read(index_x);
-          FutureConstTile<T>  tile_v;
+          FutureConstTile<T>  tile_v = v.read(index_a.col());
           // clang-format on
-
-          const bool own_v = rank.row() == dist.template rankGlobalTile<Coord::Row>(index_a.col());
-          if (own_v) {
-            const SizeType index_tmp =
-                dist.template localTileFromGlobalTile<Coord::Row>(index_a.col()) - at_start.row();
-            tile_v = v[index_tmp];
-          }
-          else {
-            tile_v = v_tmp[index_at.col() - at_start.col()];
-          }
 
           hpx::dataflow(gemm_a_func, std::move(tile_a), std::move(tile_x), tile_v);
         }
 
         // GEMM A: V . X*
         {
-          const SizeType index_tile_v{index_at.row() - at_start.row()};
-
           // clang-format off
           FutureTile<T>       tile_a = a(index_at);
-          FutureConstTile<T>  tile_v = v[index_tile_v];
-          FutureConstTile<T>  tile_x;
+          FutureConstTile<T>  tile_v = v.read(index_a.row());
+          FutureConstTile<T>  tile_x = x.read(index_a.col());
           // clang-format on
-
-          const bool own_x = rank.row() == dist.template rankGlobalTile<Coord::Row>(index_a.col());
-          if (own_x) {
-            const auto index_tmp =
-                dist.template localTileFromGlobalTile<Coord::Row>(index_a.col()) - at_start.row();
-            tile_x = x.read(LocalTileIndex{index_tmp, 0});
-          }
-          else {
-            tile_x = x_tmp.read(LocalTileIndex{0, index_at.col() - at_start.col()});
-          }
 
           hpx::dataflow(gemm_b_func, tile_a, tile_v, tile_x);
         }
