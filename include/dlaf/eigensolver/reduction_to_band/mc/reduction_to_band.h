@@ -24,7 +24,7 @@
 #include "dlaf/communication/communicator_grid.h"
 #include "dlaf/communication/functions_sync.h"
 #include "dlaf/lapack_tile.h"
-#include "dlaf/matrix.h"
+#include "dlaf/matrix/matrix.h"
 #include "dlaf/matrix/distribution.h"
 #include "dlaf/util_matrix.h"
 
@@ -33,6 +33,9 @@ namespace internal {
 namespace mc {
 
 namespace {
+
+using matrix::Matrix;
+using matrix::Tile;
 
 template <class Type>
 using MatrixT = Matrix<Type, Device::CPU>;
@@ -89,7 +92,7 @@ auto broadcast_task_send_impl(row_wise) {
   using common::make_data;
 
   return [](const auto& source, auto&& comm_wrapper) {
-    broadcast::send(comm_wrapper().rowCommunicator(), make_data(source));
+    broadcast::send(comm_wrapper.ref().rowCommunicator(), make_data(source));
   };
 }
 
@@ -98,7 +101,7 @@ auto broadcast_task_send_impl(col_wise) {
   using common::make_data;
 
   return [](const auto& source, auto&& comm_wrapper) {
-    broadcast::send(comm_wrapper().colCommunicator(), make_data(source));
+    broadcast::send(comm_wrapper.ref().colCommunicator(), make_data(source));
   };
 }
 
@@ -107,7 +110,7 @@ auto broadcast_task_recv_impl(row_wise, const comm::IndexT_MPI rank) {
   using common::make_data;
 
   return [=](auto&& dest, auto&& comm_wrapper) {
-    broadcast::receive_from(rank, comm_wrapper().rowCommunicator(), make_data(dest));
+    broadcast::receive_from(rank, comm_wrapper.ref().rowCommunicator(), make_data(dest));
   };
 }
 
@@ -116,7 +119,7 @@ auto broadcast_task_recv_impl(col_wise, const comm::IndexT_MPI rank) {
   using common::make_data;
 
   return [=](auto&& dest, auto&& comm_wrapper) {
-    broadcast::receive_from(rank, comm_wrapper().colCommunicator(), make_data(dest));
+    broadcast::receive_from(rank, comm_wrapper.ref().colCommunicator(), make_data(dest));
   };
 }
 
@@ -476,7 +479,7 @@ std::vector<hpx::shared_future<std::vector<T>>> reduction_to_band(comm::Communic
 
       if (rank_owner_row == rank.row()) {
         auto reduce_x_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
-          auto comm_grid = comm_wrapper();
+          auto comm_grid = comm_wrapper.ref();
 
           trace("reducing root X col-wise", rank_owner_row, index_x_row);
           print_tile(tile_x);
@@ -497,7 +500,7 @@ std::vector<hpx::shared_future<std::vector<T>>> reduction_to_band(comm::Communic
       }
       else {
         auto reduce_x_func = unwrapping([=](auto&& tile_x_conj, auto&& comm_wrapper) {
-          auto comm_grid = comm_wrapper();
+          auto comm_grid = comm_wrapper.ref();
 
           trace("reducing send X col-wise");
           print_tile(tile_x_conj);
@@ -517,7 +520,7 @@ std::vector<hpx::shared_future<std::vector<T>>> reduction_to_band(comm::Communic
 
     /// ... and reduce X col-wise
     auto reduce_x_func = unwrapping([rank_v0](auto&& tile_x, auto&& comm_wrapper) {
-      reduce(rank_v0.col(), comm_wrapper().rowCommunicator(), MPI_SUM, make_data(tile_x),
+      reduce(rank_v0.col(), comm_wrapper.ref().rowCommunicator(), MPI_SUM, make_data(tile_x),
              make_data(tile_x));
     });
 
@@ -566,7 +569,7 @@ std::vector<hpx::shared_future<std::vector<T>>> reduction_to_band(comm::Communic
       const auto col_x_wrt_a =
           dist.template globalTileFromLocalTile<Coord::Col>((index_x + at_offset).col());
 
-      const SizeType rank_owner = dist.template rankGlobalTile<Coord::Row>(col_x_wrt_a);
+      const auto rank_owner = dist.template rankGlobalTile<Coord::Row>(col_x_wrt_a);
 
       if (rank_owner == rank.row()) {
         const LocalTileIndex row_x_owner{dist.template localTileFromGlobalTile<Coord::Row>(col_x_wrt_a) -
@@ -672,7 +675,7 @@ hpx::shared_future<T> compute_reflector(MatrixT<T>& a, const LocalTileIndex ai_s
   auto reduce_norm_func = unwrapping([rank_v0](x0_and_squares_t&& local_data, auto&& comm_wrapper) {
     const T local_sum = local_data.second;
     T norm = local_data.second;
-    reduce(rank_v0.row(), comm_wrapper().colCommunicator(), MPI_SUM, make_data(&local_sum, 1),
+    reduce(rank_v0.row(), comm_wrapper.ref().colCommunicator(), MPI_SUM, make_data(&local_sum, 1),
            make_data(&norm, 1));
     local_data.second = norm;
     return std::move(local_data);
@@ -716,7 +719,7 @@ hpx::shared_future<T> compute_reflector(MatrixT<T>& a, const LocalTileIndex ai_s
 
     auto bcast_params_func = unwrapping([](const auto& params, const T tau, auto&& comm_wrapper) {
       const T data[3] = {params.x0, params.y, tau};
-      broadcast::send(comm_wrapper().colCommunicator(), make_data(data, 3));
+      broadcast::send(comm_wrapper.ref().colCommunicator(), make_data(data, 3));
       trace("sending params", data[0], data[1], data[2]);
     });
 
@@ -726,7 +729,7 @@ hpx::shared_future<T> compute_reflector(MatrixT<T>& a, const LocalTileIndex ai_s
     auto bcast_params_func = unwrapping([rank = rank_v0.row()](auto&& comm_wrapper) {
       trace("waiting params");
       T data[3];
-      broadcast::receive_from(rank, comm_wrapper().colCommunicator(), make_data(data, 3));
+      broadcast::receive_from(rank, comm_wrapper.ref().colCommunicator(), make_data(data, 3));
       params_reflector_t params;
       params.x0 = data[0];
       params.y = data[1];
@@ -854,7 +857,7 @@ void update_trailing_panel(MatrixT<T>& a, const LocalTileIndex ai_start_loc,
 
     // all-reduce W
     auto reduce_w_func = unwrapping([](auto&& tile_w, auto&& comm_wrapper) {
-      all_reduce(comm_wrapper().colCommunicator(), MPI_SUM, make_data(tile_w), make_data(tile_w));
+      all_reduce(comm_wrapper.ref().colCommunicator(), MPI_SUM, make_data(tile_w), make_data(tile_w));
     });
 
     hpx::dataflow(reduce_w_func, w(LocalTileIndex{0, 0}), serial_comm());
@@ -1011,7 +1014,7 @@ void compute_t_factor(MatrixT<Type>& t, ConstMatrixT<Type>& a, const LocalTileIn
         std::vector<Type> out_data(to_sizet(t_size.rows()));
         auto&& output_t = make_data(out_data.data(), t_size.rows());
         // TODO reduce just the current, otherwise reduce all together
-        reduce(rank_v0.row(), comm_wrapper().colCommunicator(), MPI_SUM, input_t, output_t);
+        reduce(rank_v0.row(), comm_wrapper.ref().colCommunicator(), MPI_SUM, input_t, output_t);
         common::copy(output_t, input_t);
         trace("reducing", t_start, t_size.rows(), *tile_t.ptr());
       });
@@ -1163,7 +1166,7 @@ void compute_x(MatrixT<T>& x, MatrixT<T>& x_tmp, const LocalTileSize at_offset, 
   const comm::Index2D rank = dist.rankIndex();
 
   for (SizeType i = at_offset.rows(); i < dist.localNrTiles().rows(); ++i) {
-    const comm::IndexT_MPI limit = dist.template nextLocalTileFromGlobalTile<Coord::Col>(
+    const auto limit = dist.template nextLocalTileFromGlobalTile<Coord::Col>(
         dist.template globalTileFromLocalTile<Coord::Row>(i) + 1);
     for (SizeType j = at_offset.cols(); j < limit; ++j) {
       const LocalTileIndex index_at_wrt_a{i, j};
@@ -1282,7 +1285,7 @@ void compute_w2(MatrixT<T>& w2, ConstMatrixT<T>& w, ConstMatrixT<T>& x,
 
   // all-reduce instead of computing it on each node, everyone in the panel should have it
   auto all_reduce_w2 = unwrapping([](auto&& tile_w2, auto&& comm_wrapper) {
-    all_reduce(comm_wrapper().colCommunicator(), MPI_SUM, make_data(tile_w2), make_data(tile_w2));
+    all_reduce(comm_wrapper.ref().colCommunicator(), MPI_SUM, make_data(tile_w2), make_data(tile_w2));
   });
 
   FutureTile<T> tile_w2 = w2(LocalTileIndex{0, 0});
@@ -1413,7 +1416,7 @@ void update_a(const LocalTileIndex at_start, MatrixT<T>& a, ConstMatrixT<T>& x, 
   const comm::Index2D rank = dist.rankIndex();
 
   for (SizeType i = at_start.row(); i < dist.localNrTiles().rows(); ++i) {
-    const comm::IndexT_MPI limit = dist.template nextLocalTileFromGlobalTile<Coord::Col>(
+    const auto limit = dist.template nextLocalTileFromGlobalTile<Coord::Col>(
         dist.template globalTileFromLocalTile<Coord::Row>(i) + 1);
     for (SizeType j = at_start.col(); j < limit; ++j) {
       const LocalTileIndex index_at{i, j};

@@ -11,7 +11,7 @@
 
 #include "dlaf/communication/communicator_grid.h"
 #include "dlaf/eigensolver/reduction_to_band/mc/reduction_to_band.h"
-#include "dlaf/matrix.h"
+#include "dlaf/matrix/matrix.h"
 #include "dlaf/util_matrix.h"
 
 namespace dlaf {

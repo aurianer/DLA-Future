@@ -8,7 +8,7 @@
 #include "dlaf/communication/communicator_grid.h"
 #include "dlaf/communication/init.h"
 #include "dlaf/eigensolver/mc.h"
-#include "dlaf/matrix.h"
+#include "dlaf/matrix/matrix.h"
 #include "dlaf/matrix/index.h"
 #include "dlaf/types.h"
 
@@ -25,8 +25,8 @@ int miniapp(hpx::program_options::variables_map& vm) {
   const SizeType n = vm["matrix-rows"].as<SizeType>();
   const SizeType nb = vm["block-size"].as<SizeType>();
 
-  const SizeType grid_rows = vm["grid-rows"].as<SizeType>();
-  const SizeType grid_cols = vm["grid-cols"].as<SizeType>();
+  const auto grid_rows = vm["grid-rows"].as<dlaf::comm::IndexT_MPI>();
+  const auto grid_cols = vm["grid-cols"].as<dlaf::comm::IndexT_MPI>();
 
   Communicator world(MPI_COMM_WORLD);
   CommunicatorGrid comm_grid(world, grid_rows, grid_cols, dlaf::common::Ordering::ColumnMajor);

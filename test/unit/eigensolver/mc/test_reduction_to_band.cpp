@@ -20,7 +20,7 @@
 #include "dlaf/communication/communicator_grid.h"
 #include "dlaf/communication/functions_sync.h"
 #include "dlaf/communication/sync/broadcast.h"
-#include "dlaf/matrix.h"
+#include "dlaf/matrix/matrix.h"
 #include "dlaf/matrix/copy.h"
 #include "dlaf/memory/memory_view.h"
 #include "dlaf/types.h"
@@ -36,24 +36,20 @@ using namespace dlaf;
 using namespace dlaf::comm;
 using namespace dlaf::matrix;
 using namespace dlaf::matrix::test;
-using namespace dlaf_test;
 using namespace testing;
 
-template <class T>
-using MatrixLocal = dlaf::test::MatrixLocal<T>;
-
 ::testing::Environment* const comm_grids_env =
-    ::testing::AddGlobalTestEnvironment(new CommunicatorGrid6RanksEnvironment);
+    ::testing::AddGlobalTestEnvironment(new dlaf::test::CommunicatorGrid6RanksEnvironment);
 
 template <typename Type>
 class ReductionToBandTest : public ::testing::Test {
 public:
   const std::vector<CommunicatorGrid>& commGrids() {
-    return comm_grids;
+    return dlaf::test::comm_grids;
   }
 };
 
-TYPED_TEST_SUITE(ReductionToBandTest, MatrixElementTypes);
+TYPED_TEST_SUITE(ReductionToBandTest, dlaf::test::MatrixElementTypes);
 
 const std::vector<LocalElementSize> square_sizes{{3, 3}, {12, 12}, {24, 24}};
 const std::vector<TileElementSize> square_block_sizes{{3, 3}};
@@ -72,7 +68,7 @@ void all_gather(Matrix<const T, device>& source, MatrixLocal<T>& dest,
   for (const auto& ij_tile : iterate_range2d(dist_source.nrTiles())) {
     const auto owner = dist_source.rankGlobalTile(ij_tile);
 
-    auto& dest_tile = dest(ij_tile);
+    auto& dest_tile = dest.tile(ij_tile);
 
     if (owner == rank) {
       const auto& source_tile = source.read(ij_tile).get();
@@ -125,7 +121,7 @@ void setup_sym_band(MatrixLocal<T>& matrix, const SizeType& band_size) {
     if (!ij.isIn(matrix.nrTiles()))
       continue;
 
-    const auto& tile_lo = matrix(ij);
+    const auto& tile_lo = matrix.tile(ij);
 
     // setup the strictly lower to zero
     // clang-format off
@@ -136,7 +132,7 @@ void setup_sym_band(MatrixLocal<T>& matrix, const SizeType& band_size) {
         tile_lo.ptr({1, 0}), tile_lo.ld());
     // clang-format on
 
-    copy_transposed(matrix(ij), matrix(common::transposed(ij)));
+    copy_transposed(matrix.tile_read(ij), matrix.tile(common::transposed(ij)));
   }
 
   // setup zeros in both lower and upper out-of-band
@@ -146,15 +142,15 @@ void setup_sym_band(MatrixLocal<T>& matrix, const SizeType& band_size) {
       if (!ij.isIn(matrix.nrTiles()))
         continue;
 
-      dlaf::matrix::test::set(matrix(ij), 0);
-      dlaf::matrix::test::set(matrix(common::transposed(ij)), 0);
+      dlaf::matrix::test::set(matrix.tile(ij), 0);
+      dlaf::matrix::test::set(matrix.tile(common::transposed(ij)), 0);
     }
   }
 
   // mirror band (diagonal tiles are correctly set just in the lower part)
   for (SizeType k = 0; k < matrix.nrTiles().rows(); ++k) {
     const GlobalTileIndex kk{k, k};
-    const auto& tile = matrix(kk);
+    const auto& tile = matrix.tile(kk);
 
     mirror_on_diag(tile);
   }
@@ -186,12 +182,12 @@ auto all_gather_taus(const SizeType k, const SizeType chunk_size, const SizeType
       const auto index_chunk_local = to_sizet(index_chunk / comm_grid.size().cols());
       chunk_data = local_taus[index_chunk_local];
       broadcast::send(comm_grid.rowCommunicator(),
-                      common::make_data(chunk_data.data(), chunk_data.size()));
+                      common::make_data(chunk_data.data(), static_cast<SizeType>(chunk_data.size())));
     }
     else {
       chunk_data.resize(to_sizet(chunk_size));
       broadcast::receive_from(owner, comm_grid.rowCommunicator(),
-                              common::make_data(chunk_data.data(), chunk_data.size()));
+                              common::make_data(chunk_data.data(), static_cast<SizeType>(chunk_data.size())));
     }
 
     // copy each chunk contiguously
@@ -217,12 +213,12 @@ TYPED_TEST(ReductionToBandTest, Correctness) {
         // setup the reference input matrix
         Matrix<const TypeParam, device> reference = [&]() {
           Matrix<TypeParam, device> reference(distribution);
-          dlaf_test::matrix::util::set_random_hermitian(reference);
+          matrix::util::set_random_hermitian(reference);
           return reference;
         }();
 
         Matrix<TypeParam, device> matrix_a(std::move(distribution));
-        dlaf::copy(reference, matrix_a);
+        copy(reference, matrix_a);
 
         // Apply reduction-to-band
         DLAF_ASSERT(band_size == matrix_a.blockSize().rows(), "not yet implemented");
@@ -287,9 +283,9 @@ TYPED_TEST(ReductionToBandTest, Correctness) {
           // clang-format off
           lapack::unmqr(lapack::Side::Left, lapack::Op::NoTrans,
             left_size.rows(), left_size.cols(), k_reflectors,
-            mat_v(v_offset).ptr(), mat_v.ld(),
+            mat_v.tile_read(v_offset).ptr(), mat_v.ld(),
             taus.data(),
-            mat_b(left_offset).ptr(), mat_b.ld());
+            mat_b.tile(left_offset).ptr(), mat_b.ld());
           // clang-format on
 
           // ... and from right
@@ -298,9 +294,9 @@ TYPED_TEST(ReductionToBandTest, Correctness) {
           // clang-format off
           lapack::unmqr(lapack::Side::Right, lapack::Op::ConjTrans,
             right_size.rows(), right_size.cols(), k_reflectors,
-            mat_v(v_offset).ptr(), mat_v.ld(),
+            mat_v.tile_read(v_offset).ptr(), mat_v.ld(),
             taus.data(),
-            mat_b(right_offset).ptr(), mat_b.ld());
+            mat_b.tile(right_offset).ptr(), mat_b.ld());
           // clang-format on
         }
 
@@ -309,7 +305,7 @@ TYPED_TEST(ReductionToBandTest, Correctness) {
                        &mat_local = mat_b](const GlobalElementIndex& element) {
           const auto tile_index = dist.globalTileIndex(element);
           const auto tile_element = dist.tileElementIndex(element);
-          return mat_local(tile_index)(tile_element);
+          return mat_local.tile_read(tile_index)(tile_element);
         };
         CHECK_MATRIX_NEAR(result, reference, 1e-3, 1e-3);
       }
