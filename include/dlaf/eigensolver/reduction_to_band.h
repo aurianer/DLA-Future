@@ -18,18 +18,7 @@
 namespace dlaf {
 namespace eigensolver {
 
-/// Reduce a Hermitian definite generalized eigenproblem to standard form, using the factorization
-/// obtained from potrf (Cholesky factorization): A <- f(A, B).
-/// It solves B=inv(L)*A*inv(L**H) or B=inv(U**H)*A*inv(U).
-/// Implementation on local memory.
-///
-/// @param mat_a on entry it contains the Hermitian matrix A (if A is real, the matrix is symmetric),
-/// on exit the matrix elements are overwritten with the elements of the matrix B.
-/// @param mat_b contains the triangular matrix. It can be lower (L) or upper (U). Only the tiles of
-/// the matrix which contain the lower triangular or the upper triangular part are accessed.
-/// @pre mat_a and mat_b have a square size,
-/// @pre mat_a and mat_b have a square block size,
-/// @pre mat_a and mat_b are not distributed.
+/// TODO Documentation
 template <Backend backend, Device device, class T>
 std::vector<hpx::shared_future<std::vector<T>>> reductionToBand(comm::CommunicatorGrid grid,
                                                                 Matrix<T, device>& mat_a) {
