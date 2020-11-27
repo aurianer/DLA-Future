@@ -11,9 +11,7 @@
 #include "dlaf/matrix/index.h"
 #include "dlaf/matrix/matrix.h"
 #include "dlaf/types.h"
-
-template <class Type>
-void print(dlaf::Matrix<const Type, dlaf::Device::CPU>& matrix, std::string prefix);
+#include "dlaf/matrix/print_numpy.h"
 
 int miniapp(hpx::program_options::variables_map& vm) {
   using Type = double;
@@ -37,11 +35,11 @@ int miniapp(hpx::program_options::variables_map& vm) {
   dlaf::Matrix<Type, dlaf::Device::CPU> mat_a(matrix_size, block_size, comm_grid);
   dlaf::matrix::util::set_random_hermitian(mat_a);
 
-  print(mat_a, "matA");
+  print(dlaf::format::numpy{}, "A", mat_a);
 
   dlaf::eigensolver::reductionToBand<dlaf::Backend::MC>(comm_grid, mat_a);
 
-  print(mat_a, "Z");
+  print(dlaf::format::numpy{}, "Z", mat_a);
 
   return hpx::finalize();
 }
@@ -68,32 +66,4 @@ int main(int argc, char** argv) {
   std::cout << "finished" << std::endl;
 
   return ret_code;
-}
-
-template <class Type>
-void print(dlaf::Matrix<const Type, dlaf::Device::CPU>& matrix, std::string prefix) {
-  using dlaf::common::iterate_range2d;
-  using dlaf::Coord;
-
-  const auto& dist = matrix.distribution();
-
-  std::ostringstream ss;
-  ss << prefix << " = np.zeros((" << dist.size() << "))" << std::endl;
-
-  for (const auto& index_tile : iterate_range2d(dist.localNrTiles())) {
-    const auto& tile = matrix.read(index_tile).get();
-
-    for (const auto& index_el : iterate_range2d(tile.size())) {
-      dlaf::GlobalElementIndex index_g{
-          dist.template globalElementFromLocalTileAndTileElement<Coord::Row>(index_tile.row(),
-                                                                             index_el.row()),
-          dist.template globalElementFromLocalTileAndTileElement<Coord::Col>(index_tile.col(),
-                                                                             index_el.col()),
-      };
-      ss << prefix << "[" << index_g.row() << "," << index_g.col() << "] = " << tile(index_el)
-         << std::endl;
-    }
-  }
-
-  std::cout << ss.str() << std::endl;
 }
