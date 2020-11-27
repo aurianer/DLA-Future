@@ -8,8 +8,8 @@
 #include "dlaf/communication/communicator_grid.h"
 #include "dlaf/communication/init.h"
 #include "dlaf/eigensolver/mc.h"
-#include "dlaf/matrix.h"
 #include "dlaf/matrix/index.h"
+#include "dlaf/matrix/matrix.h"
 #include "dlaf/types.h"
 
 template <class Type>

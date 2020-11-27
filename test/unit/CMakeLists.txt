@@ -43,7 +43,6 @@ endif()
 # Generic libraries
 add_subdirectory(common)
 add_subdirectory(communication)
-add_subdirectory(eigensolver)
 add_subdirectory(matrix)
 add_subdirectory(memory)
 

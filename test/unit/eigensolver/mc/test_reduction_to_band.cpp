@@ -13,7 +13,7 @@
 #include <gtest/gtest.h>
 
 #include "dlaf/communication/communicator_grid.h"
-#include "dlaf/matrix.h"
+#include "dlaf/matrix/matrix.h"
 #include "dlaf_test/comm_grids/grids_6_ranks.h"
 #include "dlaf_test/matrix/util_matrix.h"
 #include "dlaf_test/util_types.h"
@@ -22,21 +22,20 @@ using namespace dlaf;
 using namespace dlaf::comm;
 using namespace dlaf::matrix;
 using namespace dlaf::matrix::test;
-using namespace dlaf_test;
 using namespace testing;
 
 ::testing::Environment* const comm_grids_env =
-    ::testing::AddGlobalTestEnvironment(new CommunicatorGrid6RanksEnvironment);
+    ::testing::AddGlobalTestEnvironment(new dlaf::test::CommunicatorGrid6RanksEnvironment);
 
 template <typename Type>
 class CholeskyDistributedTest : public ::testing::Test {
 public:
   const std::vector<CommunicatorGrid>& commGrids() {
-    return comm_grids;
+    return commGrids;
   }
 };
 
-TYPED_TEST_SUITE(CholeskyDistributedTest, MatrixElementTypes);
+TYPED_TEST_SUITE(CholeskyDistributedTest, dlaf::test::MatrixElementTypes);
 
 const std::vector<LocalElementSize> square_sizes({{10, 10}, {25, 25}, {12, 12}, {0, 0}});
 const std::vector<TileElementSize> square_block_sizes({{3, 3}, {5, 5}});

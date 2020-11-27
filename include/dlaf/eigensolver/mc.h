@@ -11,7 +11,7 @@
 
 #include "dlaf/communication/communicator_grid.h"
 #include "dlaf/eigensolver/internal.h"
-#include "dlaf/matrix.h"
+#include "dlaf/matrix/matrix.h"
 
 namespace dlaf {
 
