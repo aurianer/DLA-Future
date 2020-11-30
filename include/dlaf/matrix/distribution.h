@@ -119,7 +119,7 @@ public:
   ///
   /// @pre global_element.isIn(size()).
   GlobalTileIndex globalTileIndex(const GlobalElementIndex& global_element) const noexcept {
-    DLAF_ASSERT_HEAVY(global_element.isIn(size_), "");
+    DLAF_ASSERT_HEAVY(global_element.isIn(size_), global_element, size_);
 
     return {globalTileFromGlobalElement<Coord::Row>(global_element.row()),
             globalTileFromGlobalElement<Coord::Col>(global_element.col())};
@@ -130,7 +130,7 @@ public:
   ///
   /// @pre local_tile.isIn(localNrTiles()).
   GlobalTileIndex globalTileIndex(const LocalTileIndex& local_tile) const noexcept {
-    DLAF_ASSERT_HEAVY(local_tile.isIn(local_nr_tiles_), "");
+    DLAF_ASSERT_HEAVY(local_tile.isIn(local_nr_tiles_), local_tile, local_nr_tiles_);
 
     return {globalTileFromLocalTile<Coord::Row>(local_tile.row()),
             globalTileFromLocalTile<Coord::Col>(local_tile.col())};
@@ -151,9 +151,10 @@ public:
   /// @pre global_tile.isIn(nrTiles()),
   /// @pre rank_index == rankGlobalTile(global_tile).
   LocalTileIndex localTileIndex(const GlobalTileIndex& global_tile) const {
-    DLAF_ASSERT_HEAVY(global_tile.isIn(global_nr_tiles_), "");
+    DLAF_ASSERT_HEAVY(global_tile.isIn(global_nr_tiles_), global_tile, global_nr_tiles_);
 
-    DLAF_ASSERT(rank_index_ == rankGlobalTile(global_tile), "Global tile not available in this rank!");
+    DLAF_ASSERT(rank_index_ == rankGlobalTile(global_tile), "Global tile not available in this rank!",
+                rank_index_, rankGlobalTile(global_tile));
     return {localTileFromGlobalTile<Coord::Row>(global_tile.row()),
             localTileFromGlobalTile<Coord::Col>(global_tile.col())};
   }
@@ -164,7 +165,7 @@ public:
   ///
   /// @pre global_element.isIn(size()).
   TileElementIndex tileElementIndex(const GlobalElementIndex& global_element) const noexcept {
-    DLAF_ASSERT_HEAVY(global_element.isIn(size_), "");
+    DLAF_ASSERT_HEAVY(global_element.isIn(size_), global_element, size_);
 
     return {tileElementFromGlobalElement<Coord::Row>(global_element.row()),
             tileElementFromGlobalElement<Coord::Col>(global_element.col())};
