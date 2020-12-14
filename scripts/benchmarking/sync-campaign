@@ -1,0 +1,21 @@
+if [[ $# -lt 2 ]]
+then
+  echo "usage: daint-suffix local-suffix (n)"
+  exit 1
+fi
+
+if [[ $# -eq 3 && $3 -ne 'n' ]]
+then
+  echo "last argument must be exactly n, otherwise skip it"
+  exit 1
+fi
+
+rsync\
+  -$3avh\
+  --delete\
+  --include='/*J*/'\
+  --exclude='/*'\
+  --exclude='core*'\
+  --exclude='slurm-*'\
+  daint.cscs.ch:/scratch/snx3000/ialberto/20200903-benchmark_wp8_cholesky_and_triangular/$1/\
+  /Users/ialberto/workspace/benchmarks/20200903-benchmark_wp8_cholesky_and_triangular/raw_data/$2/

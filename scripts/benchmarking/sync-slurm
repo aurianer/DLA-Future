@@ -1,0 +1,1 @@
+ssh daint.cscs.ch -- SLURM_TIME_FORMAT=standard sacct -S2020-09-01 --user=ialberto -p -o jobid,jobname,nnodes,submit,state | egrep '^[0-9]+\|' > slurm.db
