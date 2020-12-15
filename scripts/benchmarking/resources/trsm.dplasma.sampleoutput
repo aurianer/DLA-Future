@@ -1,0 +1,8 @@
+srun -n 384 -c 36 /project/csstaff/ialberto/libraries/dplasma/build/tests/testing_dtrsm -M 40960 -N 20480 --MB 256 --NB 256 --grid-rows 16 --grid-cols 24 -c 36 -v
+#+++++ cores detected       : 36
+#+++++ nodes x cores + gpu  : 384 x 36 + 0 (13824+0)
+#+++++ thread mode          : THREAD_SERIALIZED
+#+++++ P x Q                : 16 x 24 (384/384)
+#+++++ M x N x K|NRHS       : 40960 x 20480 x 20480
+#+++++ MB x NB              : 256 x 256
+[****] TIME(s)      3.73201 : dtrsm	PxQ=  16 24  NB=  256 N=   20480 :    9206.977518 gflops

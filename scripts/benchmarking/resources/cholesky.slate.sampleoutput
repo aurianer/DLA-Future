@@ -1,0 +1,13 @@
+srun -n 8 -c 36 /project/csstaff/ialberto/libraries/slate/build/test/slate_test potrf --dim 40960x40960x0 --nb 256 --p 4 --q 2 --repeat 5 --check n --ref n --type d
+SLATE version 0000.00.00, id unknown
+input: /project/csstaff/ialberto/libraries/slate/build/test/slate_test potrf --dim 40960x40960x0 --nb 256 --p 4 --q 2 --repeat 5 --check n --ref n --type d
+2020-09-21 14:54:07, MPI size 8, OpenMP threads 36
+                                                                                                                                                               
+type     origin   target   dev-dist    uplo       n    nrhs     nb     p     q  la      error       time(s)        gflops   ref_time(s)    ref_gflops  status  
+   d       host     task     column   lower   40960      10    256     4     2   1         NA        23.184       988.048            NA            NA  no check  
+   d       host     task     column   lower   40960      10    256     4     2   1         NA        18.182      1259.858            NA            NA  no check  
+   d       host     task     column   lower   40960      10    256     4     2   1         NA        16.421      1395.008            NA            NA  no check  
+   d       host     task     column   lower   40960      10    256     4     2   1         NA        15.532      1474.838            NA            NA  no check  
+   d       host     task     column   lower   40960      10    256     4     2   1         NA        15.111      1515.908            NA            NA  no check  
+
+All tests passed.

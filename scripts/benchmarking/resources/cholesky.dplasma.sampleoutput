@@ -1,0 +1,8 @@
+srun -n 4 -c 72 /project/csstaff/ialberto/libraries/dplasma/build/tests/testing_dpotrf -N 20480 --MB 288 --NB 288 --grid-rows 2 --grid-cols 2 -c 36 -v
+#+++++ cores detected       : 36
+#+++++ nodes x cores + gpu  : 4 x 36 + 0 (144+0)
+#+++++ thread mode          : THREAD_SERIALIZED
+#+++++ P x Q                : 2 x 2 (4/4)
+#+++++ M x N x K|NRHS       : 20480 x 20480 x 1
+#+++++ MB x NB              : 288 x 288
+[****] TIME(s)      1.07023 : dpotrf	PxQ=   2 2   NB=  288 N=   20480 :    2675.612934 gflops - ENQ&PROG&DEST      1.07285 :    2669.068799 gflops - ENQ      0.00252 - DEST      0.00011

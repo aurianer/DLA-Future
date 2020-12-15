@@ -1,0 +1,13 @@
+srun -n 2 -c 72 /project/csstaff/ialberto/libraries/slate/build/test/slate_test trsm --dim 40960x20480x0 --nb 256 --alpha 2 --p 1 --q 2 --repeat 5 --check n --ref n --type d
+SLATE version 0000.00.00, id unknown
+input: /project/csstaff/ialberto/libraries/slate/build/test/slate_test trsm --dim 40960x20480x0 --nb 256 --alpha 2 --p 1 --q 2 --repeat 5 --check n --ref n --type d
+2020-09-07 10:19:59, MPI size 2, OpenMP threads 72
+                                                                                                                                                                                                 
+type     origin   target     norm    side    uplo   transA     diag       m       n     alpha     nb     p     q  la      error       time(s)        gflops   ref_time(s)    ref_gflops  status  
+   d       host     task        1    left   lower  notrans  nonunit   40960   20480     2.000    256     1     2   1         NA        26.686      1287.533            NA            NA  no check  
+   d       host     task        1    left   lower  notrans  nonunit   40960   20480     2.000    256     1     2   1         NA        23.172      1482.840            NA            NA  no check  
+   d       host     task        1    left   lower  notrans  nonunit   40960   20480     2.000    256     1     2   1         NA        23.309      1474.070            NA            NA  no check  
+   d       host     task        1    left   lower  notrans  nonunit   40960   20480     2.000    256     1     2   1         NA        21.658      1586.488            NA            NA  no check  
+   d       host     task        1    left   lower  notrans  nonunit   40960   20480     2.000    256     1     2   1         NA        22.277      1542.395            NA            NA  no check  
+
+All tests passed.
