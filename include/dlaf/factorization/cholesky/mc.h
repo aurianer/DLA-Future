@@ -153,7 +153,7 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
       potrf_diag_tile(executor_hp, mat_a(kk_idx));
       panel[k] = mat_a.read(kk_idx);
       if (k != nrtile - 1)
-        comm::send_tile(executor_mpi, mpi_task_chain, Coord::Col, panel[k]);
+        comm::send_tile<Coord::Col>(executor_mpi, mpi_task_chain, panel[k]);
     }
     else if (this_rank.col() == kk_rank.col()) {
       if (k != nrtile - 1)
@@ -169,7 +169,7 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
       if (this_rank == ik_rank) {
         trsm_panel_tile(executor_hp, panel[k], mat_a(ik_idx));
         panel[i] = mat_a.read(ik_idx);
-        comm::send_tile(executor_mpi, mpi_task_chain, Coord::Row, panel[i]);
+        comm::send_tile<Coord::Row>(executor_mpi, mpi_task_chain, panel[i]);
       }
       else if (this_rank.row() == ik_rank.row()) {
         panel[i] = comm::recv_tile<T>(executor_mpi, mpi_task_chain, Coord::Row, mat_a.tileSize(ik_idx),
@@ -190,7 +190,7 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
         pool_executor trailing_matrix_executor = (j == k + 1) ? executor_hp : executor_normal;
         herk_trailing_diag_tile(trailing_matrix_executor, panel[j], mat_a(jj_idx));
         if (j != nrtile - 1)
-          comm::send_tile(executor_mpi, mpi_task_chain, Coord::Col, panel[j]);
+          comm::send_tile<Coord::Col>(executor_mpi, mpi_task_chain, panel[j]);
       }
       else {
         GlobalTileIndex jk_idx(j, k);

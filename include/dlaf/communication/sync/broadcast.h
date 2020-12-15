@@ -14,6 +14,10 @@
 
 #include <hpx/include/parallel_executors.hpp>
 #include <hpx/local/future.hpp>
+#include <hpx/threading_base/annotated_function.hpp>
+#include <hpx/tuple.hpp>
+#include <hpx/functional.hpp>
+#include <type_traits>
 
 #include "dlaf/common/assert.h"
 #include "dlaf/common/data.h"
@@ -51,23 +55,56 @@ void receive_from(const int broadcaster_rank, Communicator& communicator, DataOu
   DLAF_MPI_CALL(
       MPI_Bcast(message.data(), message.count(), message.mpi_type(), broadcaster_rank, communicator));
 }
-}
+
 }
 
-template <class T>
+template <Coord dir, class T>
+struct UnwrapCommGrid {
+  template <class U>
+  static decltype(auto) call(U&& u) {
+    return std::forward<U>(u);
+  }
+};
+
+template <Coord dir>
+struct UnwrapCommGrid<dir, common::PromiseGuard<CommunicatorGrid>> {
+  template <class U>
+  static Communicator& call(U&& u) {
+    return u.ref().subCommunicator(dir);
+  }
+};
+
+template <Coord dir, class Func>
+struct Foo {
+  Func f;
+
+  template <class... Ts>
+  auto operator()(Ts&&... ts) {
+    return f(UnwrapCommGrid<dir, std::decay_t<Ts>>::call(std::forward<Ts>(ts))...);
+  }
+};
+
+struct broadcast_send {
+  template <class DataIn>
+  void operator()(Communicator& communicator, DataIn&& message_to_send) {
+    broadcast::send(communicator, message_to_send);
+  }
+};
+
+struct broadcast_recv {
+  template <class DataOut>
+  void operator()(const comm::IndexT_MPI rank, Communicator& communicator, DataOut&& message_to_send) {
+    broadcast::receive_from(rank, communicator, message_to_send);
+  }
+};
+
+}
+
+template <Coord rc_comm, class T>
 void send_tile(hpx::threads::executors::pool_executor ex,
-               common::Pipeline<comm::CommunicatorGrid>& task_chain, Coord rc_comm,
+               common::Pipeline<comm::CommunicatorGrid>& task_chain,
                hpx::shared_future<matrix::Tile<const T, Device::CPU>> tile) {
-  using ConstTile_t = matrix::Tile<const T, Device::CPU>;
-  using PromiseComm_t = common::PromiseGuard<comm::CommunicatorGrid>;
-
-  auto send_bcast_f = hpx::util::annotated_function(
-      [rc_comm](hpx::shared_future<ConstTile_t> ftile, hpx::future<PromiseComm_t> fpcomm) {
-        PromiseComm_t pcomm = fpcomm.get();
-        comm::sync::broadcast::send(pcomm.ref().subCommunicator(rc_comm), ftile.get());
-      },
-      "send_tile");
-  hpx::dataflow(ex, std::move(send_bcast_f), tile, task_chain());
+  hpx::dataflow(ex, hpx::util::annotated_function(hpx::util::unwrapping(sync::Foo<rc_comm, sync::broadcast_send>()), "send_tile"), task_chain(), tile);
 }
 
 template <class T>

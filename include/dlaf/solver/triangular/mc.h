@@ -451,7 +451,7 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(comm::CommunicatorGrid gr
         auto kk = LocalTileIndex{k_local_row, k_local_col};
 
         kk_tile = mat_a.read(kk);
-        comm::send_tile(executor_mpi, serial_comm, Coord::Row, mat_a.read(kk));
+        comm::send_tile<Coord::Row>(executor_mpi, serial_comm, mat_a.read(kk));
       }
       else {
         kk_tile = comm::recv_tile<T>(executor_mpi, serial_comm, Coord::Row,
@@ -469,7 +469,7 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(comm::CommunicatorGrid gr
         lln::trsm_B_panel_tile(executor_hp, diag, alpha, kk_tile, mat_b(kj));
         panel[j_local] = mat_b.read(kj);
         if (k != (mat_b.nrTiles().rows() - 1)) {
-          comm::send_tile(executor_mpi, serial_comm, Coord::Col, panel[j_local]);
+          comm::send_tile<Coord::Col>(executor_mpi, serial_comm, panel[j_local]);
         }
       }
       else {
@@ -495,7 +495,7 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(comm::CommunicatorGrid gr
         auto ik = LocalTileIndex{i_local, k_local_col};
 
         ik_tile = mat_a.read(ik);
-        comm::send_tile(executor_mpi, serial_comm, Coord::Row, mat_a.read(ik));
+        comm::send_tile<Coord::Row>(executor_mpi, serial_comm, mat_a.read(ik));
       }
       else {
         ik_tile = comm::recv_tile<T>(executor_mpi, serial_comm, Coord::Row,
