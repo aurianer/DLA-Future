@@ -27,6 +27,15 @@
 #include "dlaf/communication/message.h"
 #include "dlaf/matrix/tile.h"
 
+#define DLAF_MAKE_CALLABLE_OBJECT(fname)     \
+  constexpr struct fname##_t {               \
+    template <typename... Ts>                \
+    decltype(auto) operator()(Ts&&... ts) {  \
+      return fname(std::forward<Ts>(ts)...); \
+    }                                        \
+  } fname##_o {                              \
+  }
+
 namespace dlaf {
 namespace comm {
 namespace sync {
@@ -36,7 +45,7 @@ namespace broadcast {
 ///
 /// For more information, see the Data concept in "dlaf/common/data.h".
 template <class DataIn>
-void send(Communicator& communicator, DataIn&& message_to_send) {
+void send(const Communicator& communicator, DataIn&& message_to_send) {
   auto data = common::make_data(message_to_send);
   using DataT = std::remove_const_t<typename common::data_traits<decltype(data)>::element_t>;
 
@@ -50,51 +59,81 @@ void send(Communicator& communicator, DataIn&& message_to_send) {
 /// For more information, see the Data concept in "dlaf/common/data.h".
 template <class DataOut>
 void receive_from(const int broadcaster_rank, Communicator& communicator, DataOut&& data) {
-  DLAF_ASSERT_HEAVY(broadcaster_rank != communicator.rank(), "");
+  DLAF_ASSERT_HEAVY(broadcaster_rank != communicator.rank(), "sender and receiver should be different",
+                    broadcaster_rank, communicator.rank());
   auto message = comm::make_message(common::make_data(std::forward<DataOut>(data)));
   DLAF_MPI_CALL(
       MPI_Bcast(message.data(), message.count(), message.mpi_type(), broadcaster_rank, communicator));
 }
 
+DLAF_MAKE_CALLABLE_OBJECT(send);
+DLAF_MAKE_CALLABLE_OBJECT(receive_from);
+
 }
 
-template <Coord dir, class T>
-struct UnwrapCommGrid {
+template <class T>
+struct UnwrapPromiseGuards {
   template <class U>
   static decltype(auto) call(U&& u) {
     return std::forward<U>(u);
   }
 };
 
-template <Coord dir>
-struct UnwrapCommGrid<dir, common::PromiseGuard<CommunicatorGrid>> {
+template <class T>
+struct UnwrapPromiseGuards<hpx::future<dlaf::common::PromiseGuard<T>>> {
   template <class U>
-  static Communicator& call(U&& u) {
-    return u.ref().subCommunicator(dir);
+  static decltype(auto) call(U&& u) {
+    return u.get();
   }
 };
 
-template <Coord dir, class Func>
+template <std::size_t N, class Func>
+struct apply_tuple {
+    template <class TupleIn>
+    static decltype(auto) call(TupleIn&& t) {
+        return hpx::tuple_cat(
+            apply_tuple<N-1, Func>::call(t),
+            hpx::make_tuple<>(Func{}(hpx::util::get<N-1>(t)))
+        );
+    }
+};
+
+template <class Func>
+struct apply_tuple<1, Func> {
+    template <class T>
+    static decltype(auto) call(T&& t) {
+        return hpx::make_tuple<>(
+            Func{}(hpx::get<0>(std::forward<T>(t)))
+        );
+    }
+};
+
+template <class Func, class Tuple>
+auto map_tuple(Func&&, Tuple&& t) {
+    return apply_tuple<hpx::tuple_size<std::decay_t<Tuple>>::value, Func>::call(std::forward<Tuple>(t));
+}
+
+template <Coord dir>
+struct SelectCommunicator {
+  template <class T>
+  decltype(auto) operator()(T&& t) {
+    return std::move(t);
+  }
+
+  Communicator& operator()(common::PromiseGuard<CommunicatorGrid>& guard) {
+    return guard.ref().subCommunicator(dir);
+  }
+};
+
+template <Coord dir, class Callable>
 struct Foo {
-  Func f;
+  Callable f;
 
   template <class... Ts>
   auto operator()(Ts&&... ts) {
-    return f(UnwrapCommGrid<dir, std::decay_t<Ts>>::call(std::forward<Ts>(ts))...);
-  }
-};
-
-struct broadcast_send {
-  template <class DataIn>
-  void operator()(Communicator& communicator, DataIn&& message_to_send) {
-    broadcast::send(communicator, message_to_send);
-  }
-};
-
-struct broadcast_recv {
-  template <class DataOut>
-  void operator()(const comm::IndexT_MPI rank, Communicator& communicator, DataOut&& message_to_send) {
-    broadcast::receive_from(rank, communicator, message_to_send);
+    auto t = hpx::make_tuple<>(UnwrapPromiseGuards<std::decay_t<Ts>>::call(std::forward<Ts>(ts))...);
+    auto t2 = map_tuple(SelectCommunicator<dir>{}, t);
+    return hpx::invoke_fused(hpx::util::unwrapping(f), t2);
   }
 };
 
@@ -104,28 +143,27 @@ template <Coord rc_comm, class T>
 void send_tile(hpx::threads::executors::pool_executor ex,
                common::Pipeline<comm::CommunicatorGrid>& task_chain,
                hpx::shared_future<matrix::Tile<const T, Device::CPU>> tile) {
-  hpx::dataflow(ex, hpx::util::annotated_function(hpx::util::unwrapping(sync::Foo<rc_comm, sync::broadcast_send>()), "send_tile"), task_chain(), tile);
+  hpx::dataflow(
+      ex,
+      sync::Foo<rc_comm, sync::broadcast::send_t>{},
+      task_chain(), tile);
 }
 
-template <class T>
+template <Coord rc_comm, class T>
 hpx::future<matrix::Tile<const T, Device::CPU>> recv_tile(
     hpx::threads::executors::pool_executor ex, common::Pipeline<comm::CommunicatorGrid>& mpi_task_chain,
-    Coord rc_comm, TileElementSize tile_size, int rank) {
+    TileElementSize tile_size, int rank) {
   using ConstTile_t = matrix::Tile<const T, Device::CPU>;
-  using PromiseComm_t = common::PromiseGuard<comm::CommunicatorGrid>;
   using MemView_t = memory::MemoryView<T, Device::CPU>;
   using Tile_t = matrix::Tile<T, Device::CPU>;
 
-  auto recv_bcast_f = hpx::util::annotated_function(
-      [rank, tile_size, rc_comm](hpx::future<PromiseComm_t> fpcomm) -> ConstTile_t {
-        PromiseComm_t pcomm = fpcomm.get();
+  auto recv_bcast_f = [rank, tile_size](const Communicator& comm) -> ConstTile_t {
         MemView_t mem_view(tile_size.linear_size());
         Tile_t tile(tile_size, std::move(mem_view), tile_size.rows());
-        comm::sync::broadcast::receive_from(rank, pcomm.ref().subCommunicator(rc_comm), tile);
+        comm::sync::broadcast::receive_from(rank, comm, tile);
         return ConstTile_t(std::move(tile));
-      },
-      "recv_tile");
-  return hpx::dataflow(ex, std::move(recv_bcast_f), mpi_task_chain());
+      };
+  return hpx::dataflow(ex, sync::Foo<rc_comm, decltype(recv_bcast_f)>{recv_bcast_f}, mpi_task_chain());
 }
 }
 }
