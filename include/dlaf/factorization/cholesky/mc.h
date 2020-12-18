@@ -158,7 +158,7 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
     else if (this_rank.col() == kk_rank.col()) {
       if (k != nrtile - 1)
         panel[k] = comm::recv_tile<Coord::Col, T>(executor_mpi, mpi_task_chain, mat_a.tileSize(kk_idx),
-                                      kk_rank.row());
+                                                  kk_rank.row());
     }
 
     // Iterate over the k-th column
@@ -173,7 +173,7 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
       }
       else if (this_rank.row() == ik_rank.row()) {
         panel[i] = comm::recv_tile<Coord::Row, T>(executor_mpi, mpi_task_chain, mat_a.tileSize(ik_idx),
-                                      ik_rank.col());
+                                                  ik_rank.col());
       }
     }
 
@@ -196,7 +196,7 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
         GlobalTileIndex jk_idx(j, k);
         if (j != nrtile - 1)
           panel[j] = comm::recv_tile<Coord::Col, T>(executor_mpi, mpi_task_chain, mat_a.tileSize(jk_idx),
-                                        jj_rank.row());
+                                                    jj_rank.row());
       }
 
       for (SizeType i = j + 1; i < nrtile; ++i) {

@@ -455,7 +455,7 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(comm::CommunicatorGrid gr
       }
       else {
         kk_tile = comm::recv_tile<Coord::Row, T>(executor_mpi, serial_comm,
-                                     mat_a.tileSize(GlobalTileIndex(k, k)), k_rank_col);
+                                                 mat_a.tileSize(GlobalTileIndex(k, k)), k_rank_col);
       }
     }
 
@@ -474,8 +474,9 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(comm::CommunicatorGrid gr
       }
       else {
         if (k != (mat_b.nrTiles().rows() - 1)) {
-          panel[j_local] = comm::recv_tile<Coord::Col, T>(executor_mpi, serial_comm,
-                                              mat_b.tileSize(GlobalTileIndex(k, j)), k_rank_row);
+          panel[j_local] =
+              comm::recv_tile<Coord::Col, T>(executor_mpi, serial_comm,
+                                             mat_b.tileSize(GlobalTileIndex(k, j)), k_rank_row);
         }
       }
     }
@@ -499,7 +500,7 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(comm::CommunicatorGrid gr
       }
       else {
         ik_tile = comm::recv_tile<Coord::Row, T>(executor_mpi, serial_comm,
-                                     mat_a.tileSize(GlobalTileIndex(i, k)), k_rank_col);
+                                                 mat_a.tileSize(GlobalTileIndex(i, k)), k_rank_col);
       }
 
       // Update trailing matrix

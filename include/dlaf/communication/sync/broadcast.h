@@ -12,11 +12,11 @@
 
 /// @file
 
+#include <hpx/functional.hpp>
 #include <hpx/include/parallel_executors.hpp>
 #include <hpx/local/future.hpp>
 #include <hpx/threading_base/annotated_function.hpp>
 #include <hpx/tuple.hpp>
-#include <hpx/functional.hpp>
 #include <type_traits>
 
 #include "dlaf/common/assert.h"
@@ -89,28 +89,24 @@ struct UnwrapPromiseGuards<hpx::future<dlaf::common::PromiseGuard<T>>> {
 
 template <std::size_t N, class Func>
 struct apply_tuple {
-    template <class TupleIn>
-    static decltype(auto) call(TupleIn&& t) {
-        return hpx::tuple_cat(
-            apply_tuple<N-1, Func>::call(t),
-            hpx::make_tuple<>(Func{}(hpx::util::get<N-1>(t)))
-        );
-    }
+  template <class TupleIn>
+  static decltype(auto) call(TupleIn&& t) {
+    return hpx::tuple_cat(apply_tuple<N - 1, Func>::call(t),
+                          hpx::make_tuple<>(Func{}(hpx::util::get<N - 1>(t))));
+  }
 };
 
 template <class Func>
 struct apply_tuple<1, Func> {
-    template <class T>
-    static decltype(auto) call(T&& t) {
-        return hpx::make_tuple<>(
-            Func{}(hpx::get<0>(std::forward<T>(t)))
-        );
-    }
+  template <class T>
+  static decltype(auto) call(T&& t) {
+    return hpx::make_tuple<>(Func{}(hpx::get<0>(std::forward<T>(t))));
+  }
 };
 
 template <class Func, class Tuple>
 auto map_tuple(Func&&, Tuple&& t) {
-    return apply_tuple<hpx::tuple_size<std::decay_t<Tuple>>::value, Func>::call(std::forward<Tuple>(t));
+  return apply_tuple<hpx::tuple_size<std::decay_t<Tuple>>::value, Func>::call(std::forward<Tuple>(t));
 }
 
 template <Coord dir>
@@ -143,10 +139,7 @@ template <Coord rc_comm, class T>
 void send_tile(hpx::threads::executors::pool_executor ex,
                common::Pipeline<comm::CommunicatorGrid>& task_chain,
                hpx::shared_future<matrix::Tile<const T, Device::CPU>> tile) {
-  hpx::dataflow(
-      ex,
-      sync::Foo<rc_comm, sync::broadcast::send_t>{},
-      task_chain(), tile);
+  hpx::dataflow(ex, sync::Foo<rc_comm, sync::broadcast::send_t>{}, task_chain(), tile);
 }
 
 template <Coord rc_comm, class T>
@@ -158,11 +151,11 @@ hpx::future<matrix::Tile<const T, Device::CPU>> recv_tile(
   using Tile_t = matrix::Tile<T, Device::CPU>;
 
   auto recv_bcast_f = [rank, tile_size](const Communicator& comm) -> ConstTile_t {
-        MemView_t mem_view(tile_size.linear_size());
-        Tile_t tile(tile_size, std::move(mem_view), tile_size.rows());
-        comm::sync::broadcast::receive_from(rank, comm, tile);
-        return ConstTile_t(std::move(tile));
-      };
+    MemView_t mem_view(tile_size.linear_size());
+    Tile_t tile(tile_size, std::move(mem_view), tile_size.rows());
+    comm::sync::broadcast::receive_from(rank, comm, tile);
+    return ConstTile_t(std::move(tile));
+  };
   return hpx::dataflow(ex, sync::Foo<rc_comm, decltype(recv_bcast_f)>{recv_bcast_f}, mpi_task_chain());
 }
 }
