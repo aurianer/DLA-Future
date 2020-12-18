@@ -36,6 +36,28 @@
   } fname##_o {                              \
   }
 
+template <std::size_t N, class Func>
+struct apply_tuple {
+  template <class TupleIn>
+  static decltype(auto) call(TupleIn&& t) {
+    return hpx::tuple_cat(apply_tuple<N - 1, Func>::call(t),
+                          hpx::make_tuple<>(Func{}(hpx::util::get<N - 1>(t))));
+  }
+};
+
+template <class Func>
+struct apply_tuple<1, Func> {
+  template <class T>
+  static decltype(auto) call(T&& t) {
+    return hpx::make_tuple<>(Func{}(hpx::get<0>(std::forward<T>(t))));
+  }
+};
+
+template <class Func, class Tuple>
+auto map_tuple(Func&&, Tuple&& t) {
+  return apply_tuple<hpx::tuple_size<std::decay_t<Tuple>>::value, Func>::call(std::forward<Tuple>(t));
+}
+
 namespace dlaf {
 namespace comm {
 namespace sync {
@@ -71,43 +93,17 @@ DLAF_MAKE_CALLABLE_OBJECT(receive_from);
 
 }
 
-template <class T>
 struct UnwrapPromiseGuards {
-  template <class U>
-  static decltype(auto) call(U&& u) {
-    return std::forward<U>(u);
+  template <class T>
+  static decltype(auto) call(T&& u) {
+    return std::forward<T>(u);
   }
-};
 
-template <class T>
-struct UnwrapPromiseGuards<hpx::future<dlaf::common::PromiseGuard<T>>> {
-  template <class U>
-  static decltype(auto) call(U&& u) {
+  template <class T>
+  static common::PromiseGuard<T> call(hpx::future<dlaf::common::PromiseGuard<T>> u) {
     return u.get();
   }
 };
-
-template <std::size_t N, class Func>
-struct apply_tuple {
-  template <class TupleIn>
-  static decltype(auto) call(TupleIn&& t) {
-    return hpx::tuple_cat(apply_tuple<N - 1, Func>::call(t),
-                          hpx::make_tuple<>(Func{}(hpx::util::get<N - 1>(t))));
-  }
-};
-
-template <class Func>
-struct apply_tuple<1, Func> {
-  template <class T>
-  static decltype(auto) call(T&& t) {
-    return hpx::make_tuple<>(Func{}(hpx::get<0>(std::forward<T>(t))));
-  }
-};
-
-template <class Func, class Tuple>
-auto map_tuple(Func&&, Tuple&& t) {
-  return apply_tuple<hpx::tuple_size<std::decay_t<Tuple>>::value, Func>::call(std::forward<Tuple>(t));
-}
 
 template <Coord dir>
 struct SelectCommunicator {
@@ -127,11 +123,16 @@ struct Foo {
 
   template <class... Ts>
   auto operator()(Ts&&... ts) {
-    auto t = hpx::make_tuple<>(UnwrapPromiseGuards<std::decay_t<Ts>>::call(std::forward<Ts>(ts))...);
+    auto t = hpx::make_tuple<>(UnwrapPromiseGuards::call(std::forward<Ts>(ts))...);
     auto t2 = map_tuple(SelectCommunicator<dir>{}, t);
-    return hpx::invoke_fused(hpx::util::unwrapping(f), t2);
+    return hpx::invoke_fused(hpx::util::unwrapping(std::move(f)), t2);
   }
 };
+
+template <Coord dir, class Callable>
+auto foo(Callable&& func) {
+  return Foo<dir, Callable>{std::forward<Callable>(func)};
+}
 
 }
 
@@ -139,7 +140,7 @@ template <Coord rc_comm, class T>
 void send_tile(hpx::threads::executors::pool_executor ex,
                common::Pipeline<comm::CommunicatorGrid>& task_chain,
                hpx::shared_future<matrix::Tile<const T, Device::CPU>> tile) {
-  hpx::dataflow(ex, sync::Foo<rc_comm, sync::broadcast::send_t>{}, task_chain(), tile);
+  hpx::dataflow(ex, sync::foo<rc_comm>(sync::broadcast::send_o), task_chain(), tile);
 }
 
 template <Coord rc_comm, class T>
@@ -154,9 +155,9 @@ hpx::future<matrix::Tile<const T, Device::CPU>> recv_tile(
     MemView_t mem_view(tile_size.linear_size());
     Tile_t tile(tile_size, std::move(mem_view), tile_size.rows());
     comm::sync::broadcast::receive_from(rank, comm, tile);
-    return ConstTile_t(std::move(tile));
+    return std::move(tile);
   };
-  return hpx::dataflow(ex, sync::Foo<rc_comm, decltype(recv_bcast_f)>{recv_bcast_f}, mpi_task_chain());
+  return hpx::dataflow(ex, sync::foo<rc_comm>(std::move(recv_bcast_f)), mpi_task_chain()); // TODO why if I don't move it creates a problem?!
 }
 }
 }
