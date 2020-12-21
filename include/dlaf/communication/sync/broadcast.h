@@ -27,13 +27,13 @@
 #include "dlaf/communication/message.h"
 #include "dlaf/matrix/tile.h"
 
-#define DLAF_MAKE_CALLABLE_OBJECT(fname)     \
-  constexpr struct fname##_t {               \
-    template <typename... Ts>                \
-    decltype(auto) operator()(Ts&&... ts) {  \
-      return fname(std::forward<Ts>(ts)...); \
-    }                                        \
-  } fname##_o {                              \
+#define DLAF_MAKE_CALLABLE_OBJECT(fname)          \
+  constexpr struct fname##_t {                    \
+    template <typename... Ts>                     \
+    decltype(auto) operator()(Ts&&... ts) const { \
+      return fname(std::forward<Ts>(ts)...);      \
+    }                                             \
+  } fname##_o {                                   \
   }
 
 template <std::size_t N, class Func>
@@ -67,7 +67,7 @@ namespace broadcast {
 ///
 /// For more information, see the Data concept in "dlaf/common/data.h".
 template <class DataIn>
-void send(const Communicator& communicator, DataIn&& message_to_send) {
+void send(Communicator& communicator, DataIn&& message_to_send) {
   auto data = common::make_data(message_to_send);
   using DataT = std::remove_const_t<typename common::data_traits<decltype(data)>::element_t>;
 
@@ -100,8 +100,8 @@ struct UnwrapPromiseGuards {
   }
 
   template <class T>
-  static common::PromiseGuard<T> call(hpx::future<dlaf::common::PromiseGuard<T>> u) {
-    return u.get();
+  static T& call(dlaf::common::PromiseGuard<T> u) {
+    return u.ref();
   }
 };
 
@@ -109,11 +109,11 @@ template <Coord dir>
 struct SelectCommunicator {
   template <class T>
   decltype(auto) operator()(T&& t) {
-    return std::move(t);
+    return std::forward<T>(t);
   }
 
-  Communicator& operator()(common::PromiseGuard<CommunicatorGrid>& guard) {
-    return guard.ref().subCommunicator(dir);
+  Communicator& operator()(CommunicatorGrid& guard) {
+    return guard.subCommunicator(dir);
   }
 };
 
@@ -140,7 +140,14 @@ template <Coord rc_comm, class T>
 void send_tile(hpx::threads::executors::pool_executor ex,
                common::Pipeline<comm::CommunicatorGrid>& task_chain,
                hpx::shared_future<matrix::Tile<const T, Device::CPU>> tile) {
-  hpx::dataflow(ex, sync::foo<rc_comm>(sync::broadcast::send_o), task_chain(), tile);
+  auto send_tile = [](hpx::future<common::PromiseGuard<comm::CommunicatorGrid>> fut_guard,
+                      hpx::shared_future<matrix::Tile<const T, Device::CPU>> tile) {
+    auto resource = fut_guard.get();
+    auto& comm = sync::SelectCommunicator<rc_comm>{}(resource.ref());
+
+    sync::broadcast::send_o(comm, tile.get());
+  };
+  hpx::dataflow(ex, std::move(send_tile), task_chain(), std::move(tile));
 }
 
 template <Coord rc_comm, class T>
@@ -151,13 +158,19 @@ hpx::future<matrix::Tile<const T, Device::CPU>> recv_tile(
   using MemView_t = memory::MemoryView<T, Device::CPU>;
   using Tile_t = matrix::Tile<T, Device::CPU>;
 
-  auto recv_bcast_f = [rank, tile_size](const Communicator& comm) -> ConstTile_t {
+  auto recv_bcast_f =
+      [rank,
+       tile_size](hpx::future<common::PromiseGuard<comm::CommunicatorGrid>> fut_grid) -> ConstTile_t {
+    auto resource = fut_grid.get();
+    auto& comm = sync::SelectCommunicator<rc_comm>{}(resource.ref());
+
     MemView_t mem_view(tile_size.linear_size());
     Tile_t tile(tile_size, std::move(mem_view), tile_size.rows());
-    comm::sync::broadcast::receive_from(rank, comm, tile);
+    sync::broadcast::receive_from_o(rank, comm, tile);
     return std::move(tile);
   };
-  return hpx::dataflow(ex, sync::foo<rc_comm>(std::move(recv_bcast_f)), mpi_task_chain()); // TODO why if I don't move it creates a problem?!
+  return hpx::dataflow(ex, std::move(recv_bcast_f),
+                       mpi_task_chain());  // TODO why if I don't move it creates a problem?!
 }
 }
 }
