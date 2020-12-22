@@ -13,6 +13,7 @@
 /// @file
 
 #include <type_traits>
+#include <utility>
 
 #include <hpx/functional.hpp>
 #include <hpx/include/parallel_executors.hpp>
@@ -39,9 +40,15 @@
 }
 
 template <class Func, class Tuple, std::size_t... Is>
-auto apply(Func&& func, Tuple&& t, std::index_sequence<Is...>) {
+auto apply_impl(Func&& func, Tuple&& t, std::index_sequence<Is...>) {
   return hpx::tuple<decltype(func(hpx::get<Is, std::decay_t<Tuple>>(t)))...>
     (func(hpx::get<Is>(t))...);
+}
+
+// TODO apply does not work with single argument (useful becase unwrap(a) does not return a tuple)
+template <class Func, class Tuple>
+auto apply(Func&& func, Tuple&& t) {
+  return apply_impl(std::forward<Func>(func), std::forward<Tuple>(t), std::make_index_sequence<std::tuple_size<std::decay_t<Tuple>>::value>());
 }
 
 namespace dlaf {
@@ -109,18 +116,16 @@ struct Foo {
 
   template <class... Ts>
   auto operator()(Ts&&... ts) {
-    constexpr std::make_index_sequence<sizeof...(ts)> index_;
-
     // extract all futures
     auto t1 = hpx::util::unwrap<Ts...>(std::forward<Ts>(ts)...);
 
     // Extract just PromiseGuards resources, move everything else
-    auto t2 = apply(UnwrapPromiseGuards{}, t1, index_);
+    auto t2 = apply(UnwrapPromiseGuards{}, t1);
 
     // Select row/col for CommunicatorGrid params, move everything else
-    auto t3 = apply(SelectCommunicator<dir>{}, t2, index_);
+    auto t3 = apply(SelectCommunicator<dir>{}, t2);
 
-    // TODO the UnwrapClassic current workaround does not handle shared_future...
+    // TODO still to investigate why unwrapping is needed
     return hpx::invoke_fused(hpx::util::unwrapping(f), t3);
   }
 };
@@ -147,13 +152,13 @@ hpx::future<matrix::Tile<const T, Device::CPU>> recv_tile(
   using MemView_t = memory::MemoryView<T, Device::CPU>;
   using Tile_t = matrix::Tile<T, Device::CPU>;
 
-  auto recv_bcast_f = hpx::util::unwrapping([rank, tile_size](auto&& guard) -> ConstTile_t {
+  auto recv_bcast_f = hpx::util::unwrapping([tile_size](int rank, Communicator& comm) -> ConstTile_t {
     MemView_t mem_view(tile_size.linear_size());
     Tile_t tile(tile_size, std::move(mem_view), tile_size.rows());
-    comm::sync::broadcast::receive_from(rank, guard.ref().subCommunicator(rc_comm), tile);
+    comm::sync::broadcast::receive_from(rank, comm, tile);
     return std::move(tile);
   });
-  return hpx::dataflow(ex, std::move(recv_bcast_f), mpi_task_chain()); // TODO why if I don't move it creates a problem?!
+  return hpx::dataflow(ex, sync::foo<rc_comm>(std::move(recv_bcast_f)), rank, mpi_task_chain()); // TODO why if I don't move it creates a problem?!
 }
 }
 }
