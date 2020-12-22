@@ -140,7 +140,9 @@ template <Coord rc_comm, class T>
 void send_tile(hpx::threads::executors::pool_executor ex,
                common::Pipeline<comm::CommunicatorGrid>& task_chain,
                hpx::shared_future<matrix::Tile<const T, Device::CPU>> tile) {
-  hpx::dataflow(ex, sync::foo<rc_comm>(sync::broadcast::send_o), task_chain(), tile);
+  hpx::dataflow(ex,
+                hpx::util::annotated_function(sync::foo<rc_comm>(sync::broadcast::send_o), "send_tile"),
+                task_chain(), tile);
 }
 
 template <Coord rc_comm, class T>
@@ -151,14 +153,16 @@ hpx::future<matrix::Tile<const T, Device::CPU>> recv_tile(
   using MemView_t = memory::MemoryView<T, Device::CPU>;
   using Tile_t = matrix::Tile<T, Device::CPU>;
 
-  auto recv_bcast_f = hpx::util::unwrapping([tile_size](int rank, Communicator& comm) -> ConstTile_t {
-    MemView_t mem_view(tile_size.linear_size());
-    Tile_t tile(tile_size, std::move(mem_view), tile_size.rows());
-    comm::sync::broadcast::receive_from(rank, comm, tile);
-    return std::move(tile);
-  });
-  return hpx::dataflow(ex, sync::foo<rc_comm>(std::move(recv_bcast_f)), rank,
-                       mpi_task_chain());  // TODO why if I don't move it creates a problem?!
+  auto recv_bcast_f = hpx::util::annotated_function(
+      [tile_size](int rank, Communicator& comm) -> ConstTile_t {
+        MemView_t mem_view(tile_size.linear_size());
+        Tile_t tile(tile_size, std::move(mem_view), tile_size.rows());
+        comm::sync::broadcast::receive_from(rank, comm, tile);
+        return std::move(tile);
+      },
+      "recv_tile");
+
+  return hpx::dataflow(ex, sync::foo<rc_comm>(std::move(recv_bcast_f)), rank, mpi_task_chain());
 }
 }
 }
