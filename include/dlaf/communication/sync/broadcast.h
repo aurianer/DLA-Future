@@ -12,13 +12,14 @@
 
 /// @file
 
+#include <type_traits>
+
 #include <hpx/functional.hpp>
 #include <hpx/include/parallel_executors.hpp>
 #include <hpx/local/future.hpp>
 #include <hpx/pack_traversal/unwrap.hpp>
 #include <hpx/threading_base/annotated_function.hpp>
 #include <hpx/tuple.hpp>
-#include <type_traits>
 
 #include "dlaf/common/assert.h"
 #include "dlaf/common/data.h"
@@ -39,8 +40,8 @@
 
 template <class Func, class Tuple, std::size_t... Is>
 auto apply(Func&& func, Tuple&& t, std::index_sequence<Is...>) {
-    return hpx::make_tuple(func(std::get<Is>(t))...);
-    //return hpx::make_tuple(func(std::forward<typename hpx::tuple_element<Is, std::decay_t<Tuple>>::type>(std::get<Is>(t)))...);
+  return hpx::tuple<decltype(func(hpx::get<Is, std::decay_t<Tuple>>(t)))...>
+    (func(hpx::get<Is>(t))...);
 }
 
 namespace dlaf {
@@ -78,24 +79,10 @@ DLAF_MAKE_CALLABLE_OBJECT(receive_from);
 
 }
 
-struct UnwrapClassic {
-  template <class T>
-  T operator()(hpx::future<T> t) {
-    return t.get();
-  }
-
-  // TODO how shared works?!
-
+struct UnwrapPromiseGuards {
   template <class T>
   decltype(auto) operator()(T&& t) {
     return std::forward<T>(t);
-  }
-};
-
-struct UnwrapPromiseGuards {
-  template <class T>
-  decltype(auto) operator()(T& t) {
-    return std::move(t);
   }
 
   template <class T>
@@ -107,7 +94,7 @@ struct UnwrapPromiseGuards {
 template <Coord dir>
 struct SelectCommunicator {
   template <class T>
-  decltype(auto) operator()(T& t) {
+  decltype(auto) operator()(T&& t) {
     return std::move(t);
   }
 
@@ -115,8 +102,6 @@ struct SelectCommunicator {
     return guard.subCommunicator(dir);
   }
 };
-
-template <class> struct dummy;
 
 template <Coord dir, class Callable>
 struct Foo {
@@ -127,8 +112,7 @@ struct Foo {
     constexpr std::make_index_sequence<sizeof...(ts)> index_;
 
     // extract all futures
-    //auto t1 = hpx::util::unwrap(std::forward<Ts>(ts)...);
-    auto t1 = hpx::make_tuple(UnwrapClassic{}(std::forward<Ts>(ts))...);
+    auto t1 = hpx::util::unwrap<Ts...>(std::forward<Ts>(ts)...);
 
     // Extract just PromiseGuards resources, move everything else
     auto t2 = apply(UnwrapPromiseGuards{}, t1, index_);
