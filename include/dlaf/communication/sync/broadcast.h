@@ -37,18 +37,18 @@
       return fname(std::forward<Ts>(ts)...); \
     }                                        \
   } fname##_o {                              \
-}
+  }
 
 template <class Func, class Tuple, std::size_t... Is>
 auto apply_impl(Func&& func, Tuple&& t, std::index_sequence<Is...>) {
-  return hpx::tuple<decltype(func(hpx::get<Is, std::decay_t<Tuple>>(t)))...>
-    (func(hpx::get<Is>(t))...);
+  return hpx::tuple<decltype(func(hpx::get<Is, std::decay_t<Tuple>>(t)))...>(func(hpx::get<Is>(t))...);
 }
 
 // TODO apply does not work with single argument (useful becase unwrap(a) does not return a tuple)
 template <class Func, class Tuple>
 auto apply(Func&& func, Tuple&& t) {
-  return apply_impl(std::forward<Func>(func), std::forward<Tuple>(t), std::make_index_sequence<std::tuple_size<std::decay_t<Tuple>>::value>());
+  return apply_impl(std::forward<Func>(func), std::forward<Tuple>(t),
+                    std::make_index_sequence<std::tuple_size<std::decay_t<Tuple>>::value>());
 }
 
 namespace dlaf {
@@ -134,7 +134,6 @@ template <Coord dir, class Callable>
 auto foo(Callable&& func) {
   return Foo<dir, Callable>{std::forward<Callable>(func)};
 }
-
 }
 
 template <Coord rc_comm, class T>
@@ -158,7 +157,8 @@ hpx::future<matrix::Tile<const T, Device::CPU>> recv_tile(
     comm::sync::broadcast::receive_from(rank, comm, tile);
     return std::move(tile);
   });
-  return hpx::dataflow(ex, sync::foo<rc_comm>(std::move(recv_bcast_f)), rank, mpi_task_chain()); // TODO why if I don't move it creates a problem?!
+  return hpx::dataflow(ex, sync::foo<rc_comm>(std::move(recv_bcast_f)), rank,
+                       mpi_task_chain());  // TODO why if I don't move it creates a problem?!
 }
 }
 }
