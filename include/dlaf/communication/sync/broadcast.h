@@ -132,6 +132,11 @@ struct Foo {
 };
 
 template <Coord dir, class Callable>
+auto foo(Callable func) {
+  return Foo<dir, Callable>{std::move(func)};
+}
+
+template <Coord dir, class Callable>
 struct Selector {
   Callable f;
 
@@ -139,7 +144,7 @@ struct Selector {
   auto operator()(Ts&&... ts) {
     auto t2 = hpx::tuple<Ts...>{std::forward<Ts>(ts)...};
     auto t3 = apply(SelectCommunicator<dir>{}, t2);
-    return hpx::invoke_fused(hpx::util::unwrapping(std::move(f)), t3);
+    return hpx::invoke_fused(std::move(f), t3);
   }
 };
 
@@ -149,7 +154,7 @@ auto selector(Callable f) {
 }
 
 template <Coord dir, class Callable>
-struct Foo2 {
+struct unwrap_guards_impl {
   Callable f;
 
   template <class... Ts>
@@ -166,13 +171,8 @@ struct Foo2 {
 };
 
 template <Coord dir, class Callable>
-auto foo(Callable func) {
-  return Foo<dir, Callable>{std::move(func)};
-}
-
-template <Coord dir, class Callable>
-auto foo2(Callable func) {
-  return Foo2<dir, Callable>{std::move(func)};
+auto unwrap_guards(Callable func) {
+  return unwrap_guards_impl<dir, Callable>{std::move(func)};
 }
 
 template <Coord rc_comm, class T>
@@ -180,7 +180,9 @@ void send_tile(hpx::threads::executors::pool_executor ex,
                common::Pipeline<comm::CommunicatorGrid>& task_chain,
                hpx::shared_future<matrix::Tile<const T, Device::CPU>> tile) {
   hpx::dataflow(ex,
-                hpx::util::unwrapping(foo2<rc_comm>(selector<rc_comm>(sync::broadcast::send_o))),
+                hpx::util::annotated_function(hpx::util::unwrapping(unwrap_guards<rc_comm>(
+                                                  selector<rc_comm>(sync::broadcast::send_o))),
+                                              "send_tile"),
                 task_chain(), tile);
 }
 
