@@ -40,14 +40,14 @@
   }
 
 template <class Func, class Tuple, std::size_t... Is>
-auto apply_impl(Func&& func, Tuple&& t, std::index_sequence<Is...>) {
+auto apply_impl(Func func, Tuple&& t, std::index_sequence<Is...>) {
   return hpx::tuple<decltype(func(hpx::get<Is, std::decay_t<Tuple>>(t)))...>(func(hpx::get<Is>(t))...);
 }
 
 // TODO apply does not work with single argument (useful becase unwrap(a) does not return a tuple)
 template <class Func, class Tuple>
-auto apply(Func&& func, Tuple&& t) {
-  return apply_impl(std::forward<Func>(func), std::forward<Tuple>(t),
+auto apply(Func func, Tuple&& t) {
+  return apply_impl(std::move(func), std::forward<Tuple>(t),
                     std::make_index_sequence<std::tuple_size<std::decay_t<Tuple>>::value>());
 }
 
@@ -102,7 +102,7 @@ template <Coord dir>
 struct SelectCommunicator {
   template <class T>
   decltype(auto) operator()(T&& t) {
-    return std::move(t);
+    return std::forward<T>(t);
   }
 
   Communicator& operator()(CommunicatorGrid& guard) {
@@ -131,8 +131,8 @@ struct Foo {
 };
 
 template <Coord dir, class Callable>
-auto foo(Callable&& func) {
-  return Foo<dir, Callable>{std::forward<Callable>(func)};
+auto foo(Callable func) {
+  return Foo<dir, Callable>{std::move(func)};
 }
 }
 
