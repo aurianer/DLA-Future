@@ -48,7 +48,7 @@ auto apply_impl(Func func, Tuple&& t, std::index_sequence<Is...>) {
 template <class Func, class Tuple>
 auto apply(Func func, Tuple&& t) {
   return apply_impl(std::move(func), std::forward<Tuple>(t),
-                    std::make_index_sequence<std::tuple_size<std::decay_t<Tuple>>::value>());
+                    std::make_index_sequence<hpx::tuple_size<std::decay_t<Tuple>>::value>());
 }
 
 namespace dlaf {
@@ -84,6 +84,7 @@ void receive_from(const int broadcaster_rank, Communicator& communicator, DataOu
 DLAF_MAKE_CALLABLE_OBJECT(send);
 DLAF_MAKE_CALLABLE_OBJECT(receive_from);
 
+}
 }
 
 struct UnwrapPromiseGuards {
@@ -131,9 +132,42 @@ struct Foo {
 };
 
 template <Coord dir, class Callable>
+struct selector {
+  Callable f;
+
+  template <class... Ts>
+  auto operator()(Ts&&... ts) {
+    auto t2 = hpx::tuple<Ts...>{std::forward<Ts>(ts)...};
+    auto t3 = apply(SelectCommunicator<dir>{}, t2);
+    return hpx::invoke_fused(hpx::util::unwrapping(std::move(f)), t3);
+  }
+};
+
+template <Coord dir, class Callable>
+struct Foo2 {
+  Callable f;
+
+  template <class... Ts>
+  auto operator()(Ts&&... ts) {
+    // extract all futures
+    auto t1 = hpx::tuple<Ts...>(std::forward<Ts>(ts)...);
+
+    // Extract just PromiseGuards resources, move everything else
+    auto t2 = apply(UnwrapPromiseGuards{}, t1);
+
+    // TODO still to investigate why unwrapping is needed
+    return hpx::invoke_fused(selector<dir, Callable>{std::move(f)}, t2);
+  }
+};
+
+template <Coord dir, class Callable>
 auto foo(Callable func) {
   return Foo<dir, Callable>{std::move(func)};
 }
+
+template <Coord dir, class Callable>
+auto foo2(Callable func) {
+  return Foo2<dir, Callable>{std::move(func)};
 }
 
 template <Coord rc_comm, class T>
@@ -141,7 +175,7 @@ void send_tile(hpx::threads::executors::pool_executor ex,
                common::Pipeline<comm::CommunicatorGrid>& task_chain,
                hpx::shared_future<matrix::Tile<const T, Device::CPU>> tile) {
   hpx::dataflow(ex,
-                hpx::util::annotated_function(sync::foo<rc_comm>(sync::broadcast::send_o), "send_tile"),
+                hpx::util::unwrapping(foo2<rc_comm>(sync::broadcast::send_o)),
                 task_chain(), tile);
 }
 
@@ -162,7 +196,7 @@ hpx::future<matrix::Tile<const T, Device::CPU>> recv_tile(
       },
       "recv_tile");
 
-  return hpx::dataflow(ex, sync::foo<rc_comm>(std::move(recv_bcast_f)), rank, mpi_task_chain());
+  return hpx::dataflow(ex, foo<rc_comm>(std::move(recv_bcast_f)), rank, mpi_task_chain());
 }
 }
 }
