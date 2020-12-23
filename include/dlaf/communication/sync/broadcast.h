@@ -112,32 +112,7 @@ struct SelectCommunicator {
 };
 
 template <Coord dir, class Callable>
-struct Foo {
-  Callable f;
-
-  template <class... Ts>
-  auto operator()(Ts&&... ts) {
-    // extract all futures
-    auto t1 = hpx::util::unwrap<Ts...>(std::forward<Ts>(ts)...);
-
-    // Extract just PromiseGuards resources, move everything else
-    auto t2 = apply(UnwrapPromiseGuards{}, t1);
-
-    // Select row/col for CommunicatorGrid params, move everything else
-    auto t3 = apply(SelectCommunicator<dir>{}, t2);
-
-    // TODO still to investigate why unwrapping is needed
-    return hpx::invoke_fused(hpx::util::unwrapping(f), t3);
-  }
-};
-
-template <Coord dir, class Callable>
-auto foo(Callable func) {
-  return Foo<dir, Callable>{std::move(func)};
-}
-
-template <Coord dir, class Callable>
-struct Selector {
+struct selector_impl {
   Callable f;
 
   template <class... Ts>
@@ -150,7 +125,7 @@ struct Selector {
 
 template <Coord dir, class Callable>
 auto selector(Callable f) {
-  return Selector<dir, Callable>{std::move(f)};
+  return selector_impl<dir, Callable>{std::move(f)};
 }
 
 template <class Callable>
@@ -191,20 +166,23 @@ template <Coord rc_comm, class T>
 hpx::future<matrix::Tile<const T, Device::CPU>> recv_tile(
     hpx::threads::executors::pool_executor ex, common::Pipeline<comm::CommunicatorGrid>& mpi_task_chain,
     TileElementSize tile_size, int rank) {
+  using hpx::util::annotated_function;
+  using hpx::util::unwrapping;
+
   using ConstTile_t = matrix::Tile<const T, Device::CPU>;
   using MemView_t = memory::MemoryView<T, Device::CPU>;
   using Tile_t = matrix::Tile<T, Device::CPU>;
 
-  auto recv_bcast_f = hpx::util::annotated_function(
-      [tile_size](int rank, Communicator& comm) -> ConstTile_t {
+  auto recv_bcast_f =
+      unwrap_guards(selector<rc_comm>([tile_size, rank](Communicator& comm) -> ConstTile_t {
         MemView_t mem_view(tile_size.linear_size());
         Tile_t tile(tile_size, std::move(mem_view), tile_size.rows());
         comm::sync::broadcast::receive_from(rank, comm, tile);
         return std::move(tile);
-      },
-      "recv_tile");
+      }));
 
-  return hpx::dataflow(ex, foo<rc_comm>(std::move(recv_bcast_f)), rank, mpi_task_chain());
+  return hpx::dataflow(ex, annotated_function(unwrapping(std::move(recv_bcast_f)), "recv_tile"),
+                       mpi_task_chain());
 }
 }
 }
