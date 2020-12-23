@@ -132,7 +132,7 @@ struct Foo {
 };
 
 template <Coord dir, class Callable>
-struct selector {
+struct Selector {
   Callable f;
 
   template <class... Ts>
@@ -142,6 +142,11 @@ struct selector {
     return hpx::invoke_fused(hpx::util::unwrapping(std::move(f)), t3);
   }
 };
+
+template <Coord dir, class Callable>
+auto selector(Callable f) {
+  return Selector<dir, Callable>{std::move(f)};
+}
 
 template <Coord dir, class Callable>
 struct Foo2 {
@@ -156,7 +161,7 @@ struct Foo2 {
     auto t2 = apply(UnwrapPromiseGuards{}, t1);
 
     // TODO still to investigate why unwrapping is needed
-    return hpx::invoke_fused(selector<dir, Callable>{std::move(f)}, t2);
+    return hpx::invoke_fused(std::move(f), t2);
   }
 };
 
@@ -175,7 +180,7 @@ void send_tile(hpx::threads::executors::pool_executor ex,
                common::Pipeline<comm::CommunicatorGrid>& task_chain,
                hpx::shared_future<matrix::Tile<const T, Device::CPU>> tile) {
   hpx::dataflow(ex,
-                hpx::util::unwrapping(foo2<rc_comm>(sync::broadcast::send_o)),
+                hpx::util::unwrapping(foo2<rc_comm>(selector<rc_comm>(sync::broadcast::send_o))),
                 task_chain(), tile);
 }
 
