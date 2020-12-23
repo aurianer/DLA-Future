@@ -153,7 +153,7 @@ auto selector(Callable f) {
   return Selector<dir, Callable>{std::move(f)};
 }
 
-template <Coord dir, class Callable>
+template <class Callable>
 struct unwrap_guards_impl {
   Callable f;
 
@@ -170,20 +170,21 @@ struct unwrap_guards_impl {
   }
 };
 
-template <Coord dir, class Callable>
+template <class Callable>
 auto unwrap_guards(Callable func) {
-  return unwrap_guards_impl<dir, Callable>{std::move(func)};
+  return unwrap_guards_impl<Callable>{std::move(func)};
 }
 
 template <Coord rc_comm, class T>
 void send_tile(hpx::threads::executors::pool_executor ex,
                common::Pipeline<comm::CommunicatorGrid>& task_chain,
                hpx::shared_future<matrix::Tile<const T, Device::CPU>> tile) {
-  hpx::dataflow(ex,
-                hpx::util::annotated_function(hpx::util::unwrapping(unwrap_guards<rc_comm>(
-                                                  selector<rc_comm>(sync::broadcast::send_o))),
-                                              "send_tile"),
-                task_chain(), tile);
+  using hpx::util::annotated_function;
+  using hpx::util::unwrapping;
+
+  auto send_tile_func = unwrap_guards(selector<rc_comm>(sync::broadcast::send_o));
+  hpx::dataflow(ex, annotated_function(unwrapping(std::move(send_tile_func)), "send_tile"), task_chain(),
+                tile);
 }
 
 template <Coord rc_comm, class T>
