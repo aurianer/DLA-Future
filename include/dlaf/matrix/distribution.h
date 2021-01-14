@@ -153,7 +153,8 @@ public:
   LocalTileIndex localTileIndex(const GlobalTileIndex& global_tile) const {
     DLAF_ASSERT_HEAVY(global_tile.isIn(global_nr_tiles_), global_tile, global_nr_tiles_);
 
-    DLAF_ASSERT(rank_index_ == rankGlobalTile(global_tile), rank_index_, rankGlobalTile(global_tile));
+    DLAF_ASSERT(rank_index_ == rankGlobalTile(global_tile), "Global tile not available in this rank!",
+                rank_index_, rankGlobalTile(global_tile));
     return {localTileFromGlobalTile<Coord::Row>(global_tile.row()),
             localTileFromGlobalTile<Coord::Col>(global_tile.col())};
   }
