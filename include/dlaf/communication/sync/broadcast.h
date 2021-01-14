@@ -64,37 +64,7 @@ void receive_from(const int broadcaster_rank, Communicator& communicator, DataOu
 
 DLAF_MAKE_CALLABLE_OBJECT(send);
 DLAF_MAKE_CALLABLE_OBJECT(receive_from);
-
 }
-}
-
-template <Coord dir>
-struct SelectCommunicator {
-  template <class T>
-  decltype(auto) operator()(T&& t) {
-    return std::forward<T>(t);
-  }
-
-  Communicator& operator()(CommunicatorGrid& guard) {
-    return guard.subCommunicator(dir);
-  }
-};
-
-template <Coord dir, class Callable>
-struct selector_impl {
-  Callable f;
-
-  template <class... Ts>
-  auto operator()(Ts&&... ts) {
-    auto t2 = hpx::tuple<Ts...>{std::forward<Ts>(ts)...};
-    auto t3 = apply(SelectCommunicator<dir>{}, t2);
-    return hpx::invoke_fused(std::move(f), t3);
-  }
-};
-
-template <Coord dir, class Callable>
-auto selector(Callable f) {
-  return selector_impl<dir, Callable>{std::move(f)};
 }
 
 template <Coord rc_comm, class T>

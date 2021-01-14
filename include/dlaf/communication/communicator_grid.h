@@ -14,6 +14,12 @@
 
 #include <array>
 
+#include <hpx/functional.hpp>
+#include <hpx/include/util.hpp>
+#include <hpx/tuple.hpp>
+
+#include "dlaf/common/functional.h"
+
 #include "dlaf/common/index2d.h"
 #include "dlaf/communication/communicator.h"
 
@@ -108,5 +114,36 @@ protected:
   Size2D grid_size_ = Size2D(0, 0);
 };
 
+}
+
+namespace internal {
+template <Coord dir>
+struct SelectCommunicator {
+  template <class T>
+  decltype(auto) operator()(T&& t) {
+    return std::forward<T>(t);
+  }
+
+  comm::Communicator& operator()(comm::CommunicatorGrid& guard) {
+    return guard.subCommunicator(dir);
+  }
+};
+
+template <Coord dir, class Callable>
+struct selector_impl {
+  Callable f;
+
+  template <class... Ts>
+  auto operator()(Ts&&... ts) {
+    auto t2 = hpx::tuple<Ts...>{std::forward<Ts>(ts)...};
+    auto t3 = apply(SelectCommunicator<dir>{}, t2);
+    return hpx::invoke_fused(std::move(f), t3);
+  }
+};
+}
+
+template <Coord dir, class Callable>
+auto selector(Callable f) {
+  return internal::selector_impl<dir, Callable>{std::move(f)};
 }
 }
