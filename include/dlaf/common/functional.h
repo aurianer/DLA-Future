@@ -21,13 +21,13 @@
 
 namespace dlaf {
 
-#define DLAF_MAKE_CALLABLE_OBJECT(fname)     \
-  constexpr struct fname##_t {               \
-    template <typename... Ts>                \
-    decltype(auto) operator()(Ts&&... ts) {  \
-      return fname(std::forward<Ts>(ts)...); \
-    }                                        \
-  } fname##_o {                              \
+#define DLAF_MAKE_CALLABLE_OBJECT(fname)          \
+  constexpr struct fname##_t {                    \
+    template <typename... Ts>                     \
+    decltype(auto) operator()(Ts&&... ts) const { \
+      return fname(std::forward<Ts>(ts)...);      \
+    }                                             \
+  } fname##_o {                                   \
   }
 
 namespace internal {
