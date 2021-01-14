@@ -30,26 +30,7 @@
 #include "dlaf/communication/message.h"
 #include "dlaf/matrix/tile.h"
 
-#define DLAF_MAKE_CALLABLE_OBJECT(fname)     \
-  constexpr struct fname##_t {               \
-    template <typename... Ts>                \
-    decltype(auto) operator()(Ts&&... ts) {  \
-      return fname(std::forward<Ts>(ts)...); \
-    }                                        \
-  } fname##_o {                              \
-  }
-
-template <class Func, class Tuple, std::size_t... Is>
-auto apply_impl(Func func, Tuple&& t, std::index_sequence<Is...>) {
-  return hpx::tuple<decltype(func(hpx::get<Is, std::decay_t<Tuple>>(t)))...>(func(hpx::get<Is>(t))...);
-}
-
-// TODO apply does not work with single argument (useful becase unwrap(a) does not return a tuple)
-template <class Func, class Tuple>
-auto apply(Func func, Tuple&& t) {
-  return apply_impl(std::move(func), std::forward<Tuple>(t),
-                    std::make_index_sequence<hpx::tuple_size<std::decay_t<Tuple>>::value>());
-}
+#include "dlaf/common/functional.h"
 
 namespace dlaf {
 namespace comm {
