@@ -68,18 +68,6 @@ DLAF_MAKE_CALLABLE_OBJECT(receive_from);
 }
 }
 
-struct UnwrapPromiseGuards {
-  template <class T>
-  decltype(auto) operator()(T&& t) {
-    return std::forward<T>(t);
-  }
-
-  template <class T>
-  T& operator()(dlaf::common::PromiseGuard<T>& u) {
-    return u.ref();
-  }
-};
-
 template <Coord dir>
 struct SelectCommunicator {
   template <class T>
@@ -107,28 +95,6 @@ struct selector_impl {
 template <Coord dir, class Callable>
 auto selector(Callable f) {
   return selector_impl<dir, Callable>{std::move(f)};
-}
-
-template <class Callable>
-struct unwrap_guards_impl {
-  Callable f;
-
-  template <class... Ts>
-  auto operator()(Ts&&... ts) {
-    // extract all futures
-    auto t1 = hpx::tuple<Ts...>(std::forward<Ts>(ts)...);
-
-    // Extract just PromiseGuards resources, move everything else
-    auto t2 = apply(UnwrapPromiseGuards{}, t1);
-
-    // TODO still to investigate why unwrapping is needed
-    return hpx::invoke_fused(std::move(f), t2);
-  }
-};
-
-template <class Callable>
-auto unwrap_guards(Callable func) {
-  return unwrap_guards_impl<Callable>{std::move(func)};
 }
 
 template <Coord rc_comm, class T>

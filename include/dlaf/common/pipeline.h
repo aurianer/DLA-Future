@@ -10,8 +10,12 @@
 
 #pragma once
 
+#include <hpx/functional.hpp>
 #include <hpx/include/util.hpp>
 #include <hpx/local/future.hpp>
+#include <hpx/tuple.hpp>
+
+#include "dlaf/common/functional.h"
 
 namespace dlaf {
 namespace common {
@@ -98,4 +102,42 @@ private:
   hpx::future<T> future_;  ///< This contains always the "tail" of the queue of futures.
 };
 }
+
+namespace internal {
+  struct UnwrapPromiseGuards {
+    template <class T>
+      decltype(auto) operator()(T&& t) {
+        return std::forward<T>(t);
+      }
+
+    template <class T>
+      T& operator()(dlaf::common::PromiseGuard<T>& u) {
+        return u.ref();
+      }
+  };
+
+  template <class Callable>
+    struct unwrap_guards_impl {
+      Callable f;
+
+      template <class... Ts>
+        auto operator()(Ts&&... ts) {
+          // extract all futures
+          auto t1 = hpx::tuple<Ts...>(std::forward<Ts>(ts)...);
+
+          // Extract just PromiseGuards resources, move everything else
+          auto t2 = apply(UnwrapPromiseGuards{}, t1);
+
+          // TODO still to investigate why unwrapping is needed
+          return hpx::invoke_fused(std::move(f), t2);
+        }
+    };
+}
+
+template <class Callable>
+auto unwrap_guards(Callable func) {
+  return internal::unwrap_guards_impl<Callable>{std::move(func)};
+}
+
+
 }
