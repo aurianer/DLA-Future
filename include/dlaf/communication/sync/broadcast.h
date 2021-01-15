@@ -86,9 +86,8 @@ void send_tile(hpx::threads::executors::pool_executor ex,
 }
 
 template <class T>
-void recv_tile(
-    common::Pipeline<comm::CommunicatorGrid>& mpi_task_chain,
-    Coord rc_comm, hpx::future<matrix::Tile<T, Device::CPU>> tile, int rank) {
+void recv_tile(common::Pipeline<comm::CommunicatorGrid>& mpi_task_chain, Coord rc_comm,
+               hpx::future<matrix::Tile<T, Device::CPU>> tile, int rank) {
   using PromiseComm_t = common::PromiseGuard<comm::CommunicatorGrid>;
   using Tile_t = matrix::Tile<T, Device::CPU>;
 
