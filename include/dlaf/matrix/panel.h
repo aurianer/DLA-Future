@@ -84,6 +84,11 @@ struct Panel<dir, const T, device> : protected Matrix<T, device> {
     internal_.clear();
   }
 
+  void set_offset(LocalTileIndex offset) noexcept {
+    offset_ = offset.get(component(dir));
+    range_ = iterate_range2d(LocalTileIndex(component(dir), offset_), BaseT::distribution().localNrTiles());
+  }
+
 protected:
   static Distribution compute_size(const Distribution& dist_matrix, const LocalTileIndex start) {
     const auto mb = dist_matrix.blockSize().rows();
