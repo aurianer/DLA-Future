@@ -10,8 +10,14 @@
 
 #include "dlaf/common/assert.h"
 
+#include <hpx/threading_base/annotated_function.hpp>
+
+namespace dlaf {
+namespace tile {
+
 template <class T, Device device>
 void hegst(const int itype, const blas::Uplo uplo, const Tile<T, device>& a, const Tile<T, device>& b) {
+  hpx::util::annotate_function("hegst");
   DLAF_ASSERT(square_size(a), a);
   DLAF_ASSERT(itype >= 1 && itype <= 3, itype);
 
@@ -22,6 +28,7 @@ void hegst(const int itype, const blas::Uplo uplo, const Tile<T, device>& a, con
 
 template <class T>
 void lacpy(const Tile<const T, Device::CPU>& a, const Tile<T, Device::CPU>& b) {
+  hpx::util::annotate_function("lacpy");
   DLAF_ASSERT_MODERATE(a.size() == b.size(), a, b);
 
   const SizeType m = a.size().rows();
@@ -33,6 +40,7 @@ void lacpy(const Tile<const T, Device::CPU>& a, const Tile<T, Device::CPU>& b) {
 template <class T>
 void lacpy(TileElementSize region, TileElementIndex in_idx, const Tile<const T, Device::CPU>& in,
            TileElementIndex out_idx, const Tile<T, Device::CPU>& out) {
+  hpx::util::annotate_function("lacpy");
   DLAF_ASSERT_MODERATE(in_idx.isIn(in.size() - region + TileElementSize(1, 1)),
                        "Region goes out of bounds for `in`!", region, in_idx, in);
   DLAF_ASSERT_MODERATE(out_idx.isIn(out.size() - region + TileElementSize(1, 1)),
@@ -44,12 +52,14 @@ void lacpy(TileElementSize region, TileElementIndex in_idx, const Tile<const T, 
 
 template <class T, Device device>
 dlaf::BaseType<T> lange(const lapack::Norm norm, const Tile<T, device>& a) noexcept {
+  hpx::util::annotate_function("lange");
   return lapack::lange(norm, a.size().rows(), a.size().cols(), a.ptr(), a.ld());
 }
 
 template <class T, Device device>
 dlaf::BaseType<T> lantr(const lapack::Norm norm, const blas::Uplo uplo, const blas::Diag diag,
                         const Tile<T, device>& a) noexcept {
+  hpx::util::annotate_function("lantr");
   switch (uplo) {
     case blas::Uplo::Lower:
       DLAF_ASSERT(a.size().rows() >= a.size().cols(), a);
@@ -66,6 +76,7 @@ dlaf::BaseType<T> lantr(const lapack::Norm norm, const blas::Uplo uplo, const bl
 
 template <class T, Device device>
 void potrf(const blas::Uplo uplo, const Tile<T, device>& a) noexcept {
+  hpx::util::annotate_function("potrf");
   auto info = potrfInfo(uplo, a);
 
   DLAF_ASSERT(info == 0, info);
@@ -73,10 +84,14 @@ void potrf(const blas::Uplo uplo, const Tile<T, device>& a) noexcept {
 
 template <class T, Device device>
 long long potrfInfo(const blas::Uplo uplo, const Tile<T, device>& a) {
+  hpx::util::annotate_function("potrf");
   DLAF_ASSERT(square_size(a), a);
 
   auto info = lapack::potrf(uplo, a.size().rows(), a.ptr(), a.ld());
   DLAF_ASSERT_HEAVY(info >= 0, info);
 
   return info;
+}
+
+}
 }
