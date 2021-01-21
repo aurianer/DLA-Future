@@ -86,7 +86,13 @@ struct Panel<dir, const T, device> : protected Matrix<T, device> {
 
   void set_offset(LocalTileIndex offset) noexcept {
     offset_ = offset.get(component(dir));
-    range_ = iterate_range2d(LocalTileIndex(component(dir), offset_), BaseT::distribution().localNrTiles());
+
+    range_ = iterate_range2d(
+        LocalTileIndex(component(dir), offset_),
+        LocalTileSize(
+          component(dir),
+          dist_matrix_.localNrTiles().get(component(dir)) - offset_, 1)
+        );
   }
 
 protected:
@@ -113,10 +119,16 @@ protected:
 
   // TODO think about passing a reference to the matrix instead of the distribution (useful for tilesize)
   Panel(matrix::Distribution dist_matrix, LocalTileIndex offset)
-      : BaseT(compute_size(dist_matrix, offset)), dist_matrix_(dist_matrix),
-        offset_(offset.get(component(dir))),
-        range_(iterate_range2d(LocalTileIndex(component(dir), offset_),
-                               BaseT::distribution().localNrTiles())) {
+    :
+      BaseT(compute_size(dist_matrix, offset)), dist_matrix_(dist_matrix),
+      offset_(offset.get(component(dir))),
+      range_(iterate_range2d(
+            LocalTileIndex(component(dir), offset_),
+            LocalTileSize(
+              component(dir),
+              dist_matrix_.localNrTiles().get(component(dir)) - offset_, 1)
+            ))
+  {
     // TODO remove this and enable util::set (for setting to zero for red2band)
     util::set(static_cast<Matrix<T, device>&>(*this), [](const auto&) { return 0; });
 
