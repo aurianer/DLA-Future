@@ -138,6 +138,9 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
   const SizeType nrtile = mat_a.nrTiles().cols();
 
   matrix::Panel<Coord::Row, T, Device::CPU> diag_tiles(distr, {0, 0});
+  matrix::Panel<Coord::Col, T, Device::CPU> panel_col(distr, {0, 0});
+  matrix::Panel<Coord::Row, T, Device::CPU> panel_col_t(distr, {0, 0});
+
   for (SizeType k = 0; k < nrtile; ++k) {
     const GlobalTileIndex kk_idx(k, k);
     const comm::Index2D kk_rank = distr.rankGlobalTile(kk_idx);
@@ -161,8 +164,6 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
       }
     }
 
-    matrix::Panel<Coord::Col, T, Device::CPU> panel_col(distr, kk_offset);
-
     // Update the column panel under diagonal tile and broadcast
     if (kk_rank.col() == this_rank.col()) {
       for (SizeType i = distr.nextLocalTileFromGlobalTile<Coord::Row>(k + 1);
@@ -176,7 +177,6 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
     }
 
     // TODO skip last step tile
-    matrix::Panel<Coord::Row, T, Device::CPU> panel_col_t(distr, kk_offset);
     matrix::broadcast(kk_rank.col(), panel_col, panel_col_t, mpi_task_chain);
 
     // Iterate over the trailing matrix
@@ -200,6 +200,8 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
                                   panel_col_t.read({Coord::Col, j}), mat_a(LocalTileIndex{i, j}));
       }
     }
+    panel_col_t.reset();
+    panel_col.reset();
   }
 }
 
