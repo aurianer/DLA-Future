@@ -150,6 +150,9 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
         distr.nextLocalTileFromGlobalTile<Coord::Col>(k),
     };
 
+    panel_col.set_offset(kk_offset);
+    panel_col_t.set_offset(kk_offset);
+
     //// Factorization of diagonal tile and broadcast it along the `k`-th column
     // TODO skip last step tile
     if (kk_rank.col() == this_rank.col()) {
