@@ -180,7 +180,7 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
     }
 
     // TODO skip last step tile
-    matrix::broadcast(kk_rank.col(), panel_col, panel_col_t, mpi_task_chain);
+    matrix::broadcast(executor_mpi, kk_rank.col(), panel_col, panel_col_t, mpi_task_chain);
 
     // Iterate over the trailing matrix
     for (SizeType j = distr.nextLocalTileFromGlobalTile<Coord::Col>(k + 1);

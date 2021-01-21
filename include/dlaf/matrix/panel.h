@@ -179,7 +179,8 @@ namespace internal {
 
 // Generic implementation of the broadcast row-wise or col-wise
 template <Coord dir, class T, Device device, Coord panel_type>
-void bcast_panel(const comm::IndexT_MPI rank_root, Panel<panel_type, T, device>& ws,
+void bcast_panel(hpx::threads::executors::pool_executor ex, const comm::IndexT_MPI rank_root,
+                 Panel<panel_type, T, device>& ws,
                  common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
   using namespace comm::sync::broadcast;
   using hpx::util::unwrapping;
@@ -188,9 +189,9 @@ void bcast_panel(const comm::IndexT_MPI rank_root, Panel<panel_type, T, device>&
 
   for (const auto& index : ws) {
     if (rank == rank_root)
-      comm::send_tile(serial_comm, dir, ws.read(index));
+      comm::send_tile(ex, serial_comm, dir, ws.read(index));
     else
-      comm::recv_tile(serial_comm, dir, ws(index), rank_root);
+      comm::recv_tile(ex, serial_comm, dir, ws(index), rank_root);
   }
 }
 
@@ -207,15 +208,15 @@ std::pair<SizeType, comm::IndexT_MPI> transposed_owner(const Distribution& dist,
 }
 
 template <class T, Device device>
-void broadcast(comm::IndexT_MPI root_col, Panel<Coord::Col, T, device>& ws,
-               common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
-  internal::bcast_panel<Coord::Row>(root_col, ws, serial_comm);
+void broadcast(hpx::threads::executors::pool_executor ex, comm::IndexT_MPI root_col,
+               Panel<Coord::Col, T, device>& ws, common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
+  internal::bcast_panel<Coord::Row>(ex, root_col, ws, serial_comm);
 }
 
 template <class T, Device device>
-void broadcast(comm::IndexT_MPI root_row, Panel<Coord::Row, T, device>& ws,
-               common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
-  internal::bcast_panel<Coord::Col>(root_row, ws, serial_comm);
+void broadcast(hpx::threads::executors::pool_executor ex, comm::IndexT_MPI root_row,
+               Panel<Coord::Row, T, device>& ws, common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
+  internal::bcast_panel<Coord::Col>(ex, root_row, ws, serial_comm);
 }
 
 /// Broadcast
@@ -229,8 +230,9 @@ void broadcast(comm::IndexT_MPI root_row, Panel<Coord::Row, T, device>& ws,
 /// - linked as external tile to the corresponding one in the column panel, if current rank owns it
 /// - received from the owning rank, which broadcasts the tile from the row panel along the column
 template <class T, Device device, Coord from_dir, Coord to_dir>
-void broadcast(comm::IndexT_MPI root, Panel<from_dir, T, device>& ws_from,
-               Panel<to_dir, T, device>& ws_to, common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
+void broadcast(hpx::threads::executors::pool_executor ex, comm::IndexT_MPI root,
+               Panel<from_dir, T, device>& ws_from, Panel<to_dir, T, device>& ws_to,
+               common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
   static_assert(from_dir == transposed(to_dir), "this method broadcasts and transposes coordinates");
 
   DLAF_ASSERT(ws_from.distribution_matrix() == ws_to.distribution_matrix(),
@@ -251,7 +253,7 @@ void broadcast(comm::IndexT_MPI root, Panel<from_dir, T, device>& ws_from,
   // communicate each tile orthogonally to the direction of the destination panel
   constexpr Coord comm_dir = transposed(to_dir);
 
-  broadcast(root, ws_from, serial_comm);
+  broadcast(ex, root, ws_from, serial_comm);
 
   const auto& dist = ws_from.distribution_matrix();
   for (const auto& idx_dst : ws_to) {
@@ -263,10 +265,10 @@ void broadcast(comm::IndexT_MPI root, Panel<from_dir, T, device>& ws_from,
     if (dist.rankIndex().get(from_coord) == owner) {
       const auto idx_src = dist.template localTileFromGlobalTile<from_coord>(idx_cross);
       ws_to.set_tile(idx_dst, ws_from.read({from_coord, idx_src}));
-      comm::send_tile(serial_comm, comm_dir, ws_to.read(idx_dst));
+      comm::send_tile(ex, serial_comm, comm_dir, ws_to.read(idx_dst));
     }
     else {
-      comm::recv_tile(serial_comm, comm_dir, ws_to(idx_dst), owner);
+      comm::recv_tile(ex, serial_comm, comm_dir, ws_to(idx_dst), owner);
     }
   }
 }
