@@ -159,10 +159,12 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
       if (kk_rank.row() == this_rank.row()) {
         potrf_diag_tile(executor_hp, mat_a(kk_idx));
         diag_tiles.set_tile(kk_offset, mat_a.read(kk_idx));
-        comm::send_tile(executor_mpi, mpi_task_chain, Coord::Col, diag_tiles.read(kk_offset));
+        if (kk_idx.row() < nrtile - 1)
+          comm::send_tile(executor_mpi, mpi_task_chain, Coord::Col, diag_tiles.read(kk_offset));
       }
       else {
-        comm::recv_tile<T>(executor_mpi, mpi_task_chain, Coord::Col, diag_tiles(kk_offset),
+        if (kk_idx.row() < nrtile - 1)
+          comm::recv_tile<T>(executor_mpi, mpi_task_chain, Coord::Col, diag_tiles(kk_offset),
                            kk_rank.row());
       }
     }
@@ -180,10 +182,11 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
     }
 
     // TODO skip last step tile
-    matrix::broadcast(executor_mpi, kk_rank.col(), panel_col, panel_col_t, mpi_task_chain);
+    if (kk_idx.col() < nrtile - 1)
+      matrix::broadcast(executor_mpi, kk_rank.col(), panel_col, panel_col_t, mpi_task_chain);
 
     // Iterate over the trailing matrix
-    for (SizeType j = distr.nextLocalTileFromGlobalTile<Coord::Col>(k + 1);
+    for (SizeType j = kk_offset.col() + 1;
          j < distr.localNrTiles().cols(); ++j) {
       const SizeType jj = distr.globalTileFromLocalTile<Coord::Col>(j);
       const comm::IndexT_MPI owner_row = distr.rankGlobalTile<Coord::Row>(jj);
