@@ -190,23 +190,25 @@ protected:
 namespace internal {
 
 // Generic implementation of the broadcast row-wise or col-wise
-template <Coord dir, class T, Device device, Coord panel_type>
+template <class T, Device device, Coord panel_type>
 void bcast_panel(hpx::threads::executors::pool_executor ex, const comm::IndexT_MPI rank_root,
                  Panel<panel_type, T, device>& ws, comm::Size2D grid_size,
                  common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
   using namespace comm::sync::broadcast;
   using hpx::util::unwrapping;
 
-  if (grid_size.get(component(dir)) == 1)
+  constexpr auto comm_dir = transposed(panel_type);
+
+  if (grid_size.get(component(comm_dir)) > 1)
     return;
 
-  const auto rank = ws.rankIndex().get(component(dir));
+  const auto rank = ws.rankIndex().get(component(comm_dir));
 
   for (const auto& index : ws) {
     if (rank == rank_root)
-      comm::send_tile(ex, serial_comm, dir, ws.read(index));
+      comm::send_tile(ex, serial_comm, comm_dir, ws.read(index));
     else
-      comm::recv_tile(ex, serial_comm, dir, ws(index), rank_root);
+      comm::recv_tile(ex, serial_comm, comm_dir, ws(index), rank_root);
   }
 }
 
@@ -222,16 +224,10 @@ std::pair<SizeType, comm::IndexT_MPI> transposed_owner(const Distribution& dist,
 }
 }
 
-template <class T, Device device>
+template <class T, Device device, Coord panel_type>
 void broadcast(hpx::threads::executors::pool_executor ex, comm::IndexT_MPI root_col,
-               Panel<Coord::Col, T, device>& ws, comm::Size2D grid_size, common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
-  internal::bcast_panel<Coord::Row>(ex, root_col, ws, grid_size, serial_comm);
-}
-
-template <class T, Device device>
-void broadcast(hpx::threads::executors::pool_executor ex, comm::IndexT_MPI root_row,
-               Panel<Coord::Row, T, device>& ws, comm::Size2D grid_size, common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
-  internal::bcast_panel<Coord::Col>(ex, root_row, ws, grid_size, serial_comm);
+               Panel<panel_type, T, device>& ws, comm::Size2D grid_size, common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
+  internal::bcast_panel(ex, root_col, ws, grid_size, serial_comm);
 }
 
 /// Broadcast
