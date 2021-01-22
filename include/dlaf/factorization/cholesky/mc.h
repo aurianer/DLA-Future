@@ -115,6 +115,24 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(Matrix<T, Device::CPU>& mat_a
 }
 
 template <class T>
+struct RoundRobin {
+  template <class... Args>
+  RoundRobin(std::size_t n, Args&& ... args) : next_index_(0) {
+    for (auto i = 0; i < n; ++i)
+      pool_.emplace_back(std::forward<Args>(args)...);
+  }
+
+  T& next_resource() {
+    auto idx = (next_index_ + 1) % pool_.size();
+    std::swap(idx, next_index_);
+    return pool_[idx];
+  }
+
+  std::size_t next_index_;
+  std::vector<T> pool_;
+};
+
+template <class T>
 void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
                                                    Matrix<T, Device::CPU>& mat_a) {
   using hpx::threads::executors::pool_executor;
@@ -137,8 +155,10 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
   const SizeType nrtile = mat_a.nrTiles().cols();
 
   matrix::Panel<Coord::Row, T, Device::CPU> diag_tiles(distr, {0, 0});
-  matrix::Panel<Coord::Col, T, Device::CPU> panel_col(distr, {0, 0});
-  matrix::Panel<Coord::Row, T, Device::CPU> panel_col_t(distr, {0, 0});
+
+  constexpr std::size_t N_WORKSPACES = 3;
+  RoundRobin<matrix::Panel<Coord::Col, T, Device::CPU>> panel_cols(N_WORKSPACES, distr, LocalTileIndex(0, 0));
+  RoundRobin<matrix::Panel<Coord::Row, T, Device::CPU>> panel_cols_t(N_WORKSPACES, distr, LocalTileIndex(0, 0));
 
   for (SizeType k = 0; k < nrtile; ++k) {
     const GlobalTileIndex kk_idx(k, k);
@@ -148,6 +168,10 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
         distr.nextLocalTileFromGlobalTile<Coord::Row>(k),
         distr.nextLocalTileFromGlobalTile<Coord::Col>(k),
     };
+
+
+    auto& panel_col = panel_cols.next_resource();
+    auto& panel_col_t = panel_cols_t.next_resource();
 
     panel_col.set_offset(kk_offset);
     panel_col_t.set_offset(kk_offset);
