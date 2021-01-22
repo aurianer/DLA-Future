@@ -96,7 +96,7 @@ struct Panel<dir, const T, device> : protected Matrix<T, device> {
   }
 
 protected:
-  static Distribution compute_size(const Distribution& dist_matrix, const LocalTileIndex start) {
+  static Matrix<T, device> setup_matrix(const Distribution& dist_matrix, const LocalTileIndex start) {
     const auto mb = dist_matrix.blockSize().rows();
     const auto nb = dist_matrix.blockSize().cols();
 
@@ -114,13 +114,15 @@ protected:
       }
     }();
 
-    return {panel_size, dist_matrix.blockSize()};
+    Distribution dist{panel_size, dist_matrix.blockSize()};
+    auto layout = tileLayout(dist);
+    return {std::move(dist), layout};
   }
 
   // TODO think about passing a reference to the matrix instead of the distribution (useful for tilesize)
   Panel(matrix::Distribution dist_matrix, LocalTileIndex offset)
     :
-      BaseT(compute_size(dist_matrix, offset)), dist_matrix_(dist_matrix),
+      BaseT(setup_matrix(dist_matrix, offset)), dist_matrix_(dist_matrix),
       offset_(offset.get(component(dir))),
       range_(iterate_range2d(
             LocalTileIndex(component(dir), offset_),
@@ -130,7 +132,7 @@ protected:
             ))
   {
     // TODO remove this and enable util::set (for setting to zero for red2band)
-    util::set(static_cast<Matrix<T, device>&>(*this), [](const auto&) { return 0; });
+    // util::set(static_cast<Matrix<T, device>&>(*this), [](const auto&) { return 0; });
 
     DLAF_ASSERT_MODERATE(BaseT::nrTiles().get(dir) == 1, BaseT::nrTiles());
 
