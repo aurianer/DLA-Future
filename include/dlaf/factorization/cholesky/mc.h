@@ -13,8 +13,6 @@
 #include <hpx/include/threads.hpp>
 #include <hpx/include/util.hpp>
 
-#include <unordered_map>
-
 #include "dlaf/blas_tile.h"
 #include "dlaf/common/index2d.h"
 #include "dlaf/common/pipeline.h"
@@ -130,7 +128,8 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
   pool_executor executor_normal("default", thread_priority_default);
 
   // Set up MPI executor
-  comm::Index2D this_rank = grid.rank();
+  const comm::Index2D this_rank = grid.rank();
+  const auto grid_size = grid.size();
   auto executor_mpi = (mpi_pool_exists()) ? pool_executor("mpi", thread_priority_high) : executor_hp;
   common::Pipeline<comm::CommunicatorGrid> mpi_task_chain(std::move(grid));
 
@@ -182,30 +181,41 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
     }
 
     // TODO skip last step tile
-    if (kk_idx.col() < nrtile - 1)
+    if (grid_size.cols() > 1)
+      matrix::broadcast(executor_mpi, kk_rank.col(), panel_col, mpi_task_chain);
+    if (grid_size.rows() > 1)
       matrix::broadcast(executor_mpi, kk_rank.col(), panel_col, panel_col_t, mpi_task_chain);
 
     // Iterate over the trailing matrix
-    for (SizeType j = kk_offset.col() + 1;
-         j < distr.localNrTiles().cols(); ++j) {
-      const SizeType jj = distr.globalTileFromLocalTile<Coord::Col>(j);
-      const comm::IndexT_MPI owner_row = distr.rankGlobalTile<Coord::Row>(jj);
+    for (SizeType j_idx = k + 1; j_idx < nrtile; ++j_idx) {
+      const auto owner = distr.rankGlobalTile({j_idx, j_idx});
 
-      // Update the jj-tile
-      if (this_rank.row() == owner_row) {
-        pool_executor trailing_matrix_executor = (j == k + 1) ? executor_hp : executor_normal;
+      if (owner.col() != this_rank.col())
+        continue;
 
-        herk_trailing_diag_tile(trailing_matrix_executor, panel_col_t.read({Coord::Col, j}),
-                                mat_a(GlobalTileIndex{jj, jj}));
+      if (this_rank.row() == owner.row()) {
+        pool_executor trailing_matrix_executor = (j_idx == k + 1) ? executor_hp : executor_normal;
+
+        const auto j = distr.localTileFromGlobalTile<Coord::Col>(j_idx);
+        herk_trailing_diag_tile(trailing_matrix_executor,
+            panel_col_t.read({Coord::Col, j}),
+            mat_a(GlobalTileIndex{j_idx, j_idx}));
       }
 
-      // Update the ij-tile using the ik-tile and jk-tile
-      for (SizeType i = distr.nextLocalTileFromGlobalTile<Coord::Row>(jj + 1);
-           i < distr.localNrTiles().rows(); ++i) {
+      for (SizeType i_idx = j_idx + 1; i_idx < nrtile; ++i_idx) {
+        const auto owner_row = distr.rankGlobalTile<Coord::Row>(i_idx);
+
+        if (owner_row != this_rank.row())
+          continue;
+
+        const auto i = distr.localTileFromGlobalTile<Coord::Row>(i_idx);
+        const auto j = distr.localTileFromGlobalTile<Coord::Col>(j_idx);
         gemm_trailing_matrix_tile(executor_normal, panel_col.read({Coord::Row, i}),
-                                  panel_col_t.read({Coord::Col, j}), mat_a(LocalTileIndex{i, j}));
+            panel_col_t.read({Coord::Col, j}), mat_a(LocalTileIndex{i, j}));
+
       }
     }
+
     panel_col_t.reset();
     panel_col.reset();
   }
