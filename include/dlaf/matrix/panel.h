@@ -210,11 +210,11 @@ void bcast_panel(hpx::threads::executors::pool_executor ex, const comm::IndexT_M
 // helper function that identifies the owner of a transposed coordinate,
 // it returns both the component of the rank in the transposed dimension and
 // its global cross coordinate (i.e. row == col in the global frame of reference)
-template <Coord component>
+template <Coord dst_coord>
 std::pair<SizeType, comm::IndexT_MPI> transposed_owner(const Distribution& dist,
                                                        const LocalTileIndex idx) {
-  const auto idx_cross = dist.template globalTileFromLocalTile<component>(idx.get(component));
-  const auto rank_owner = dist.template rankGlobalTile<transposed(component)>(idx_cross);
+  const auto idx_cross = dist.template globalTileFromLocalTile<dst_coord>(idx.get(dst_coord));
+  const auto rank_owner = dist.template rankGlobalTile<transposed(dst_coord)>(idx_cross);
   return std::make_pair(idx_cross, rank_owner);
 }
 }
