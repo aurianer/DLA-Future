@@ -181,10 +181,8 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
     }
 
     // TODO skip last step tile
-    if (grid_size.cols() > 1)
-      matrix::broadcast(executor_mpi, kk_rank.col(), panel_col, mpi_task_chain);
-    if (grid_size.rows() > 1)
-      matrix::broadcast(executor_mpi, kk_rank.col(), panel_col, panel_col_t, mpi_task_chain);
+    matrix::broadcast(executor_mpi, kk_rank.col(), panel_col, grid_size, mpi_task_chain);
+    matrix::broadcast(executor_mpi, kk_rank.col(), panel_col, panel_col_t, grid_size, mpi_task_chain);
 
     // Iterate over the trailing matrix
     for (SizeType j_idx = k + 1; j_idx < nrtile; ++j_idx) {
