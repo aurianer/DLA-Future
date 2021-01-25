@@ -22,6 +22,7 @@
 #include "dlaf/communication/communicator_grid.h"
 #include "dlaf/communication/executor.h"
 #include "dlaf/communication/functions_sync.h"
+#include "dlaf/communication/sync/broadcast.h"
 #include "dlaf/factorization/cholesky/api.h"
 #include "dlaf/lapack_tile.h"
 #include "dlaf/matrix/distribution.h"
@@ -192,20 +193,25 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
       }
     }
 
-    // Update the column panel under diagonal tile and broadcast
-    if (kk_rank.col() == this_rank.col()) {
-      for (SizeType i = distr.nextLocalTileFromGlobalTile<Coord::Row>(k + 1);
-           i < distr.localNrTiles().rows(); ++i) {
-        const LocalTileIndex local_idx(Coord::Row, i);
-        const LocalTileIndex ik_idx(i, distr.localTileFromGlobalTile<Coord::Col>(k));
-
-        trsm_panel_tile(executor_hp, diag_tiles.read(kk_offset), mat_a(ik_idx));
-        panel_col.set_tile(local_idx, mat_a.read(ik_idx));
-      }
-    }
+    // COLUMN UPDATE
 
     // TODO skip last step tile
-    matrix::broadcast(executor_mpi, kk_rank.col(), panel_col, grid_size, mpi_task_chain);
+    // Update the column panel under diagonal tile and broadcast
+    for (SizeType i = distr.nextLocalTileFromGlobalTile<Coord::Row>(k + 1);
+        i < distr.localNrTiles().rows(); ++i) {
+      const LocalTileIndex local_idx(Coord::Row, i);
+      const LocalTileIndex ik_idx(i, distr.localTileFromGlobalTile<Coord::Col>(k));
+
+      if (kk_rank.col() == this_rank.col()) {
+        trsm_panel_tile(executor_hp, diag_tiles.read(kk_offset), mat_a(ik_idx));
+
+        panel_col.set_tile(local_idx, mat_a.read(ik_idx));
+        comm::send_tile(executor_mpi, mpi_task_chain, Coord::Row, panel_col.read(local_idx));
+      }
+      else {
+        comm::recv_tile(executor_mpi, mpi_task_chain, Coord::Row, panel_col(local_idx), kk_rank.col());
+      }
+    }
 
     // TRAILING MATRIX
 
