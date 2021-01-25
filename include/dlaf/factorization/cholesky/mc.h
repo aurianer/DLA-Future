@@ -36,11 +36,28 @@ namespace factorization {
 namespace internal {
 
 template <class T>
+struct potrf_diag_tile_o {
+  void operator()(hpx::future<matrix::Tile<T, Device::CPU>> matrix_tile) {
+    hpx::util::unwrapping(tile::potrf<T, Device::CPU>)(blas::Uplo::Lower, std::move(matrix_tile));
+  }
+};
+
+template <class T>
 void potrf_diag_tile(hpx::threads::executors::pool_executor executor_hp,
                      hpx::future<matrix::Tile<T, Device::CPU>> matrix_tile) {
   hpx::dataflow(executor_hp, hpx::util::unwrapping(tile::potrf<T, Device::CPU>), blas::Uplo::Lower,
                 std::move(matrix_tile));
 }
+
+template <class T>
+struct trsm_panel_tile_o {
+  void operator()(hpx::shared_future<matrix::Tile<const T, Device::CPU>> kk_tile,
+                  hpx::future<matrix::Tile<T, Device::CPU>> matrix_tile) {
+    hpx::util::unwrapping(tile::trsm<T, Device::CPU>)(blas::Side::Right, blas::Uplo::Lower,
+                                                      blas::Op::ConjTrans, blas::Diag::NonUnit, 1.0,
+                                                      std::move(kk_tile), std::move(matrix_tile));
+  }
+};
 
 template <class T>
 void trsm_panel_tile(hpx::threads::executors::pool_executor executor_hp,
@@ -52,12 +69,32 @@ void trsm_panel_tile(hpx::threads::executors::pool_executor executor_hp,
 }
 
 template <class T>
+struct herk_trailing_diag_tile_o {
+  void operator()(hpx::shared_future<matrix::Tile<const T, Device::CPU>> panel_tile,
+                  hpx::future<matrix::Tile<T, Device::CPU>> matrix_tile) {
+    hpx::util::unwrapping(tile::herk<T, Device::CPU>)(blas::Uplo::Lower, blas::Op::NoTrans, -1.0,
+                                                      panel_tile, 1.0, std::move(matrix_tile));
+  }
+};
+
+template <class T>
 void herk_trailing_diag_tile(hpx::threads::executors::pool_executor trailing_matrix_executor,
                              hpx::shared_future<matrix::Tile<const T, Device::CPU>> panel_tile,
                              hpx::future<matrix::Tile<T, Device::CPU>> matrix_tile) {
   hpx::dataflow(trailing_matrix_executor, hpx::util::unwrapping(tile::herk<T, Device::CPU>),
                 blas::Uplo::Lower, blas::Op::NoTrans, -1.0, panel_tile, 1.0, std::move(matrix_tile));
 }
+
+template <class T>
+struct gemm_trailing_matrix_tile_o {
+  void operator()(hpx::shared_future<matrix::Tile<const T, Device::CPU>> panel_tile,
+                  hpx::shared_future<matrix::Tile<const T, Device::CPU>> col_panel,
+                  hpx::future<matrix::Tile<T, Device::CPU>> matrix_tile) {
+    hpx::util::unwrapping(tile::gemm<T, Device::CPU>)(blas::Op::NoTrans, blas::Op::ConjTrans, -1.0,
+                                                      std::move(panel_tile), std::move(col_panel), 1.0,
+                                                      std::move(matrix_tile));
+  }
+};
 
 template <class T>
 void gemm_trailing_matrix_tile(hpx::threads::executors::pool_executor trailing_matrix_executor,
@@ -170,7 +207,6 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
         distr.nextLocalTileFromGlobalTile<Coord::Col>(k),
     };
 
-
     auto& panel_col = panel_cols.next_resource();
     auto& panel_col_t = panel_cols_t.next_resource();
 
@@ -181,15 +217,17 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
     // TODO skip last step tile
     if (kk_rank.col() == this_rank.col()) {
       if (kk_rank.row() == this_rank.row()) {
-        potrf_diag_tile(executor_hp, mat_a(kk_idx));
+        hpx::dataflow(executor_hp, potrf_diag_tile_o<T>{}, mat_a(kk_idx));
+
         diag_tiles.set_tile(kk_offset, mat_a.read(kk_idx));
         if (kk_idx.row() < nrtile - 1)
-          comm::send_tile(executor_mpi, mpi_task_chain, Coord::Col, diag_tiles.read(kk_offset));
+          hpx::dataflow(executor_mpi, comm::send_tile_o<T>{}, mpi_task_chain(), Coord::Col,
+                        diag_tiles.read(kk_offset));
       }
       else {
         if (kk_idx.row() < nrtile - 1)
-          comm::recv_tile<T>(executor_mpi, mpi_task_chain, Coord::Col, diag_tiles(kk_offset),
-                           kk_rank.row());
+          hpx::dataflow(executor_mpi, comm::recv_tile_o<T>{}, mpi_task_chain(), Coord::Col,
+                        diag_tiles(kk_offset), kk_rank.row());
       }
     }
 
@@ -203,13 +241,16 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
       const LocalTileIndex ik_idx(i, distr.localTileFromGlobalTile<Coord::Col>(k));
 
       if (kk_rank.col() == this_rank.col()) {
-        trsm_panel_tile(executor_hp, diag_tiles.read(kk_offset), mat_a(ik_idx));
+        hpx::dataflow(executor_hp, trsm_panel_tile_o<T>{}, diag_tiles.read(kk_offset), mat_a(ik_idx));
 
         panel_col.set_tile(local_idx, mat_a.read(ik_idx));
-        comm::send_tile(executor_mpi, mpi_task_chain, Coord::Row, panel_col.read(local_idx));
+
+        hpx::dataflow(executor_mpi, comm::send_tile_o<T>{}, mpi_task_chain(), Coord::Row,
+                      panel_col.read(local_idx));
       }
       else {
-        comm::recv_tile(executor_mpi, mpi_task_chain, Coord::Row, panel_col(local_idx), kk_rank.col());
+        hpx::dataflow(executor_mpi, comm::recv_tile_o<T>{}, mpi_task_chain(), Coord::Row,
+                      panel_col(local_idx), kk_rank.col());
       }
     }
 
@@ -222,7 +263,7 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
 
       if (this_rank == tl_rank) {
         const auto tl = distr.localTileIndex(tl_idx);
-        herk_trailing_diag_tile(executor_hp, panel_col.read(tl), mat_a(tl));
+        hpx::dataflow(executor_hp, herk_trailing_diag_tile_o<T>{}, panel_col.read(tl), mat_a(tl));
       }
     }
 
@@ -238,18 +279,18 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
         const auto i = distr.localTileFromGlobalTile<Coord::Row>(jt_idx);
 
         if (jt_idx != k + 1) {
-          herk_trailing_diag_tile(executor_normal,
-              panel_col.read({Coord::Row, i}),
-              mat_a(LocalTileIndex{i, j}));
+          hpx::dataflow(executor_normal, herk_trailing_diag_tile_o<T>{}, panel_col.read({Coord::Row, i}),
+                        mat_a(LocalTileIndex{i, j}));
         }
 
         panel_col_t.set_tile({Coord::Col, j}, panel_col.read({Coord::Row, i}));
-        comm::send_tile(
-            executor_mpi, mpi_task_chain, Coord::Col, panel_col_t.read({Coord::Col, j}));
+
+        hpx::dataflow(executor_mpi, comm::send_tile_o<T>{}, mpi_task_chain(), Coord::Col,
+                      panel_col_t.read({Coord::Col, j}));
       }
       else {
-        comm::recv_tile(
-            executor_mpi, mpi_task_chain, Coord::Col, panel_col_t({Coord::Col, j}), owner.row());
+        hpx::dataflow(executor_mpi, comm::recv_tile_o<T>{}, mpi_task_chain(), Coord::Col,
+                      panel_col_t({Coord::Col, j}), owner.row());
       }
 
       for (SizeType i_idx = jt_idx + 1; i_idx < nrtile; ++i_idx) {
@@ -259,9 +300,8 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
           continue;
 
         const auto i = distr.localTileFromGlobalTile<Coord::Row>(i_idx);
-        gemm_trailing_matrix_tile(executor_normal, panel_col.read({Coord::Row, i}),
-            panel_col_t.read({Coord::Col, j}), mat_a(LocalTileIndex{i, j}));
-
+        hpx::dataflow(executor_normal, gemm_trailing_matrix_tile_o<T>{}, panel_col.read({Coord::Row, i}),
+                      panel_col_t.read({Coord::Col, j}), mat_a(LocalTileIndex{i, j}));
       }
     }
 
