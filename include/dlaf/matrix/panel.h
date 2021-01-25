@@ -201,7 +201,7 @@ void bcast_panel(hpx::threads::executors::pool_executor ex, const comm::IndexT_M
 
   constexpr auto comm_dir = transposed(panel_type);
 
-  if (grid_size.get(component(comm_dir)) > 1)
+  if (grid_size.get(component(comm_dir)) < 1)
     return;
 
   const auto rank = ws.rankIndex().get(component(comm_dir));
