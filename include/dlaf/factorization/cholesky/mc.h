@@ -221,17 +221,21 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
     // TODO skip last step tile
     if (kk_rank.col() == this_rank.col()) {
       if (kk_rank.row() == this_rank.row()) {
-        hpx::dataflow(executor_hp, potrf_diag_tile_o<T>{}, mat_a(kk_idx));
+        hpx::dataflow(executor_hp,
+                      time_it(std::to_string(kk_idx.row()), "potrf", potrf_diag_tile_o<T>{}),
+                      mat_a(kk_idx));
 
         diag_tiles.set_tile(kk_offset, mat_a.read(kk_idx));
         if (kk_idx.row() < nrtile - 1)
-          hpx::dataflow(executor_mpi, comm::send_tile_o<T>{}, mpi_task_chain(), Coord::Col,
-                        diag_tiles.read(kk_offset));
+          hpx::dataflow(executor_mpi,
+                        time_it(std::to_string(kk_idx.row()) + "diag", "send", comm::send_tile_o<T>{}),
+                        mpi_task_chain(), Coord::Col, diag_tiles.read(kk_offset));
       }
       else {
         if (kk_idx.row() < nrtile - 1)
-          hpx::dataflow(executor_mpi, comm::recv_tile_o<T>{}, mpi_task_chain(), Coord::Col,
-                        diag_tiles(kk_offset), kk_rank.row());
+          hpx::dataflow(executor_mpi,
+                        time_it(std::to_string(kk_idx.row()) + "diag", "recv", comm::recv_tile_o<T>{}),
+                        mpi_task_chain(), Coord::Col, diag_tiles(kk_offset), kk_rank.row());
       }
     }
 
