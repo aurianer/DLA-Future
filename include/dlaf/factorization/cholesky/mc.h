@@ -220,30 +220,39 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
       }
     }
 
-    matrix::broadcast(executor_mpi, kk_rank.col(), panel_col, panel_col_t, grid_size, mpi_task_chain);
-
     // Iterate over the trailing matrix
-    for (SizeType j_idx = k + 1; j_idx < nrtile; ++j_idx) {
-      const auto owner = distr.rankGlobalTile({j_idx, j_idx});
+    for (SizeType jt_idx = k + 1; jt_idx < nrtile; ++jt_idx) {
+      const auto owner = distr.rankGlobalTile({jt_idx, jt_idx});
 
       if (owner.col() != this_rank.col())
         continue;
 
-      if (this_rank.row() == owner.row() && (j_idx != k + 1)) {
-        const auto j = distr.localTileFromGlobalTile<Coord::Col>(j_idx);
-        herk_trailing_diag_tile(executor_normal,
-            panel_col_t.read({Coord::Col, j}),
-            mat_a(GlobalTileIndex{j_idx, j_idx}));
+      const auto j = distr.localTileFromGlobalTile<Coord::Col>(jt_idx);
+      if (this_rank.row() == owner.row()) {
+        const auto i = distr.localTileFromGlobalTile<Coord::Row>(jt_idx);
+
+        if (jt_idx != k + 1) {
+          herk_trailing_diag_tile(executor_normal,
+              panel_col.read({Coord::Row, i}),
+              mat_a(LocalTileIndex{i, j}));
+        }
+
+        panel_col_t.set_tile({Coord::Col, j}, panel_col.read({Coord::Row, i}));
+        comm::send_tile(
+            executor_mpi, mpi_task_chain, Coord::Col, panel_col_t.read({Coord::Col, j}));
+      }
+      else {
+        comm::recv_tile(
+            executor_mpi, mpi_task_chain, Coord::Col, panel_col_t({Coord::Col, j}), owner.row());
       }
 
-      for (SizeType i_idx = j_idx + 1; i_idx < nrtile; ++i_idx) {
+      for (SizeType i_idx = jt_idx + 1; i_idx < nrtile; ++i_idx) {
         const auto owner_row = distr.rankGlobalTile<Coord::Row>(i_idx);
 
         if (owner_row != this_rank.row())
           continue;
 
         const auto i = distr.localTileFromGlobalTile<Coord::Row>(i_idx);
-        const auto j = distr.localTileFromGlobalTile<Coord::Col>(j_idx);
         gemm_trailing_matrix_tile(executor_normal, panel_col.read({Coord::Row, i}),
             panel_col_t.read({Coord::Col, j}), mat_a(LocalTileIndex{i, j}));
 
