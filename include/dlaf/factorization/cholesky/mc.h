@@ -31,6 +31,8 @@
 #include "dlaf/memory/memory_view.h"
 #include "dlaf/util_matrix.h"
 
+#include "dlaf/profiling/profiler.h"
+
 namespace dlaf {
 namespace factorization {
 namespace internal {
@@ -178,6 +180,8 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
   using hpx::threads::thread_priority_default;
   using comm::internal::mpi_pool_exists;
 
+  using dlaf::profiling::util::time_it;
+
   // Set up executor on the default queue with high priority.
   pool_executor executor_hp("default", thread_priority_high);
   // Set up executor on the default queue with default priority.
@@ -245,12 +249,12 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
 
         panel_col.set_tile(local_idx, mat_a.read(ik_idx));
 
-        hpx::dataflow(executor_mpi, comm::send_tile_o<T>{}, mpi_task_chain(), Coord::Row,
-                      panel_col.read(local_idx));
+        hpx::dataflow(executor_mpi, time_it("row", "send", comm::send_tile_o<T>{}), mpi_task_chain(),
+                      Coord::Row, panel_col.read(local_idx));
       }
       else {
-        hpx::dataflow(executor_mpi, comm::recv_tile_o<T>{}, mpi_task_chain(), Coord::Row,
-                      panel_col(local_idx), kk_rank.col());
+        hpx::dataflow(executor_mpi, time_it("row", "recv", comm::recv_tile_o<T>{}), mpi_task_chain(),
+                      Coord::Row, panel_col(local_idx), kk_rank.col());
       }
     }
 
@@ -263,7 +267,8 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
 
       if (this_rank == tl_rank) {
         const auto tl = distr.localTileIndex(tl_idx);
-        hpx::dataflow(executor_hp, herk_trailing_diag_tile_o<T>{}, panel_col.read(tl), mat_a(tl));
+        hpx::dataflow(executor_hp, time_it("first!", "herk", herk_trailing_diag_tile_o<T>{}),
+                      panel_col.read(tl), mat_a(tl));
       }
     }
 
@@ -279,18 +284,19 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
         const auto i = distr.localTileFromGlobalTile<Coord::Row>(jt_idx);
 
         if (jt_idx != k + 1) {
-          hpx::dataflow(executor_normal, herk_trailing_diag_tile_o<T>{}, panel_col.read({Coord::Row, i}),
-                        mat_a(LocalTileIndex{i, j}));
+          hpx::dataflow(executor_normal,
+                        time_it(std::to_string(jt_idx), "herk", herk_trailing_diag_tile_o<T>{}),
+                        panel_col.read({Coord::Row, i}), mat_a(LocalTileIndex{i, j}));
         }
 
         panel_col_t.set_tile({Coord::Col, j}, panel_col.read({Coord::Row, i}));
 
-        hpx::dataflow(executor_mpi, comm::send_tile_o<T>{}, mpi_task_chain(), Coord::Col,
-                      panel_col_t.read({Coord::Col, j}));
+        hpx::dataflow(executor_mpi, time_it("col", "send", comm::send_tile_o<T>{}), mpi_task_chain(),
+                      Coord::Col, panel_col_t.read({Coord::Col, j}));
       }
       else {
-        hpx::dataflow(executor_mpi, comm::recv_tile_o<T>{}, mpi_task_chain(), Coord::Col,
-                      panel_col_t({Coord::Col, j}), owner.row());
+        hpx::dataflow(executor_mpi, time_it("col", "recv", comm::recv_tile_o<T>{}), mpi_task_chain(),
+                      Coord::Col, panel_col_t({Coord::Col, j}), owner.row());
       }
 
       for (SizeType i_idx = jt_idx + 1; i_idx < nrtile; ++i_idx) {
@@ -300,8 +306,11 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
           continue;
 
         const auto i = distr.localTileFromGlobalTile<Coord::Row>(i_idx);
-        hpx::dataflow(executor_normal, gemm_trailing_matrix_tile_o<T>{}, panel_col.read({Coord::Row, i}),
-                      panel_col_t.read({Coord::Col, j}), mat_a(LocalTileIndex{i, j}));
+        hpx::dataflow(executor_normal,
+                      time_it(std::to_string(i) + ";" + std::to_string(j), "gemm",
+                              gemm_trailing_matrix_tile_o<T>{}),
+                      panel_col.read({Coord::Row, i}), panel_col_t.read({Coord::Col, j}),
+                      mat_a(LocalTileIndex{i, j}));
       }
     }
 

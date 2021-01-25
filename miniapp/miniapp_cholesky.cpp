@@ -25,6 +25,8 @@
 
 #include "dlaf/common/timer.h"
 
+#include "dlaf/profiling/profiler.h"
+
 namespace {
 
 using hpx::util::unwrapping;
@@ -168,6 +170,8 @@ int main(int argc, char** argv) {
     ("check-result", value<std::string>()->default_value(  "")->implicit_value("all"), "Enable result check ('all', 'last')")
   ;
   // clang-format on
+
+  dlaf::profiling::profiler::instance();
 
   hpx::init_params p;
   p.desc_cmdline = desc_commandline;
