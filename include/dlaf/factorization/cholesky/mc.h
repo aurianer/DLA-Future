@@ -206,6 +206,20 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
 
     // TODO skip last step tile
     matrix::broadcast(executor_mpi, kk_rank.col(), panel_col, grid_size, mpi_task_chain);
+
+    // TRAILING MATRIX
+
+    // TODO compute 1st herk, which unlocks next algorithm iteration
+    const GlobalTileIndex tl_idx = kk_idx + GlobalTileSize(1, 1);
+    if (tl_idx.isIn(distr.nrTiles())) {
+      const comm::Index2D tl_rank = distr.rankGlobalTile(tl_idx);
+
+      if (this_rank == tl_rank) {
+        const auto tl = distr.localTileIndex(tl_idx);
+        herk_trailing_diag_tile(executor_hp, panel_col.read(tl), mat_a(tl));
+      }
+    }
+
     matrix::broadcast(executor_mpi, kk_rank.col(), panel_col, panel_col_t, grid_size, mpi_task_chain);
 
     // Iterate over the trailing matrix
@@ -215,11 +229,9 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
       if (owner.col() != this_rank.col())
         continue;
 
-      if (this_rank.row() == owner.row()) {
-        pool_executor trailing_matrix_executor = (j_idx == k + 1) ? executor_hp : executor_normal;
-
+      if (this_rank.row() == owner.row() && (j_idx != k + 1)) {
         const auto j = distr.localTileFromGlobalTile<Coord::Col>(j_idx);
-        herk_trailing_diag_tile(trailing_matrix_executor,
+        herk_trailing_diag_tile(executor_normal,
             panel_col_t.read({Coord::Col, j}),
             mat_a(GlobalTileIndex{j_idx, j_idx}));
       }
