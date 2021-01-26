@@ -9,6 +9,7 @@
 //
 #pragma once
 
+#include <hpx/async_distributed/dataflow.hpp>
 #include <hpx/include/parallel_executors.hpp>
 #include <hpx/include/threads.hpp>
 #include <hpx/include/util.hpp>
@@ -189,14 +190,17 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
 
     // Broadcast the diagonal tile along the `k`-th column
     if (this_rank == kk_rank) {
-      potrf_diag_tile(executor_hp, mat_a(kk_idx));
+      hpx::dataflow(executor_hp,
+                      time_it(std::to_string(kk_idx.row()), "potrf", potrf_diag_tile_o<T>{}),
+                      mat_a(kk_idx));
+
       panel[k] = mat_a.read(kk_idx);
       if (k != nrtile - 1)
-        comm::send_tile(executor_mpi, mpi_task_chain, Coord::Col, panel[k]);
+        hpx::dataflow(executor_mpi, time_it("", "send", comm::send_tile_o<T>{}), mpi_task_chain(), Coord::Col, panel[k]);
     }
     else if (this_rank.col() == kk_rank.col()) {
       if (k != nrtile - 1)
-        panel[k] = comm::recv_tile<T>(executor_mpi, mpi_task_chain, Coord::Col, mat_a.tileSize(kk_idx),
+        panel[k] = hpx::dataflow(executor_mpi, time_it("", "recv", comm::recv_tile_o<T>{}), mpi_task_chain(), Coord::Col, mat_a.tileSize(kk_idx),
                                       kk_rank.row());
     }
 
@@ -206,12 +210,12 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
       comm::Index2D ik_rank = mat_a.rankGlobalTile(ik_idx);
 
       if (this_rank == ik_rank) {
-        trsm_panel_tile(executor_hp, panel[k], mat_a(ik_idx));
+        hpx::dataflow(executor_hp, time_it("", "trsm", trsm_panel_tile_o<T>{}), panel[k], mat_a(ik_idx));
         panel[i] = mat_a.read(ik_idx);
-        comm::send_tile(executor_mpi, mpi_task_chain, Coord::Row, panel[i]);
+        hpx::dataflow(executor_mpi, time_it("", "send", comm::send_tile_o<T>{}), mpi_task_chain(), Coord::Row, panel[i]);
       }
       else if (this_rank.row() == ik_rank.row()) {
-        panel[i] = comm::recv_tile<T>(executor_mpi, mpi_task_chain, Coord::Row, mat_a.tileSize(ik_idx),
+        panel[i] = hpx::dataflow(executor_mpi, time_it("", "recv", comm::recv_tile_o<T>{}), mpi_task_chain(), Coord::Row, mat_a.tileSize(ik_idx),
                                       ik_rank.col());
       }
     }
@@ -227,22 +231,28 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
       // Broadcast the jk-tile along the j-th column and update the jj-tile
       if (this_rank.row() == jj_rank.row()) {
         pool_executor trailing_matrix_executor = (j == k + 1) ? executor_hp : executor_normal;
-        herk_trailing_diag_tile(trailing_matrix_executor, panel[j], mat_a(jj_idx));
+        hpx::dataflow(trailing_matrix_executor,
+                        time_it(std::to_string(j), "herk", herk_trailing_diag_tile_o<T>{}),
+                        panel[j], mat_a(jj_idx));
         if (j != nrtile - 1)
-          comm::send_tile(executor_mpi, mpi_task_chain, Coord::Col, panel[j]);
+          hpx::dataflow(executor_mpi, time_it("", "send", comm::send_tile_o<T>{}), mpi_task_chain(), Coord::Col, panel[j]);
       }
       else {
         GlobalTileIndex jk_idx(j, k);
         if (j != nrtile - 1)
-          panel[j] = comm::recv_tile<T>(executor_mpi, mpi_task_chain, Coord::Col, mat_a.tileSize(jk_idx),
-                                        jj_rank.row());
+          panel[j] = hpx::dataflow(executor_mpi, time_it("", "recv", comm::recv_tile_o<T>{}), mpi_task_chain(), Coord::Col, mat_a.tileSize(jk_idx), jj_rank.row());
       }
 
       for (SizeType i = j + 1; i < nrtile; ++i) {
         // Update the ij-tile using the ik-tile and jk-tile
         if (this_rank.row() == distr.rankGlobalTile<Coord::Row>(i)) {
           GlobalTileIndex ij_idx(i, j);
-          gemm_trailing_matrix_tile(executor_normal, panel[i], panel[j], mat_a(ij_idx));
+          hpx::dataflow(executor_normal,
+              time_it(
+                std::to_string(i) + ";" + std::to_string(j),
+                "gemm",
+                gemm_trailing_matrix_tile_o<T>{}),
+              panel[i], panel[j], mat_a(ij_idx));
         }
       }
     }

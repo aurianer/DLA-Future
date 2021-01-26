@@ -90,19 +90,38 @@ void send_tile(hpx::threads::executors::pool_executor ex,
 template <class T>
 struct recv_tile_o {
   void operator()(hpx::future<common::PromiseGuard<comm::CommunicatorGrid>> mpi_task_chain,
-                  Coord rc_comm, hpx::future<matrix::Tile<T, Device::CPU>> tile, comm::IndexT_MPI rank) {
+      Coord rc_comm, hpx::future<matrix::Tile<T, Device::CPU>> tile, comm::IndexT_MPI rank) {
     using PromiseComm_t = common::PromiseGuard<comm::CommunicatorGrid>;
     using Tile_t = matrix::Tile<T, Device::CPU>;
 
     auto recv_bcast_f = hpx::util::annotated_function(
         [rank, rc_comm](hpx::future<PromiseComm_t> fpcomm, hpx::future<Tile_t> ftile) {
-          PromiseComm_t pcomm = fpcomm.get();
-          Tile_t tile = ftile.get();
-          comm::sync::broadcast::receive_from(rank, pcomm.ref().subCommunicator(rc_comm), tile);
+        PromiseComm_t pcomm = fpcomm.get();
+        Tile_t tile = ftile.get();
+        comm::sync::broadcast::receive_from(rank, pcomm.ref().subCommunicator(rc_comm), tile);
         },
         "recv_tile");
     recv_bcast_f(std::move(mpi_task_chain), std::move(tile));
   }
+
+auto operator()(hpx::future<common::PromiseGuard<comm::CommunicatorGrid>> mpi_task_chain,
+    Coord rc_comm, TileElementSize tile_size, comm::IndexT_MPI rank) {
+  using ConstTile_t = matrix::Tile<const T, Device::CPU>;
+  using PromiseComm_t = common::PromiseGuard<comm::CommunicatorGrid>;
+  using MemView_t = memory::MemoryView<T, Device::CPU>;
+  using Tile_t = matrix::Tile<T, Device::CPU>;
+
+  auto recv_bcast_f = hpx::util::annotated_function(
+      [rank, tile_size, rc_comm](hpx::future<PromiseComm_t> fpcomm) -> ConstTile_t {
+      PromiseComm_t pcomm = fpcomm.get();
+      MemView_t mem_view(tile_size.linear_size());
+      Tile_t tile(tile_size, std::move(mem_view), tile_size.rows());
+      comm::sync::broadcast::receive_from(rank, pcomm.ref().subCommunicator(rc_comm), tile);
+      return ConstTile_t(std::move(tile));
+      },
+      "recv_tile");
+  return recv_bcast_f(std::move(mpi_task_chain));
+}
 };
 
 template <class T>
