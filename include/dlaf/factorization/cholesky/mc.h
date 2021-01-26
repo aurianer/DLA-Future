@@ -196,11 +196,11 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
 
       panel[k] = mat_a.read(kk_idx);
       if (k != nrtile - 1)
-        hpx::dataflow(executor_mpi, time_it("", "send", comm::send_tile_o<T>{}), mpi_task_chain(), Coord::Col, panel[k]);
+        hpx::dataflow(executor_mpi, time_it("diag", "send", comm::send_tile_o<T>{}), mpi_task_chain(), Coord::Col, panel[k]);
     }
     else if (this_rank.col() == kk_rank.col()) {
       if (k != nrtile - 1)
-        panel[k] = hpx::dataflow(executor_mpi, time_it("", "recv", comm::recv_tile_o<T>{}), mpi_task_chain(), Coord::Col, mat_a.tileSize(kk_idx),
+        panel[k] = hpx::dataflow(executor_mpi, time_it("diag", "recv", comm::recv_tile_o<T>{}), mpi_task_chain(), Coord::Col, mat_a.tileSize(kk_idx),
                                       kk_rank.row());
     }
 
@@ -212,10 +212,10 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
       if (this_rank == ik_rank) {
         hpx::dataflow(executor_hp, time_it("", "trsm", trsm_panel_tile_o<T>{}), panel[k], mat_a(ik_idx));
         panel[i] = mat_a.read(ik_idx);
-        hpx::dataflow(executor_mpi, time_it("", "send", comm::send_tile_o<T>{}), mpi_task_chain(), Coord::Row, panel[i]);
+        hpx::dataflow(executor_mpi, time_it("row", "send", comm::send_tile_o<T>{}), mpi_task_chain(), Coord::Row, panel[i]);
       }
       else if (this_rank.row() == ik_rank.row()) {
-        panel[i] = hpx::dataflow(executor_mpi, time_it("", "recv", comm::recv_tile_o<T>{}), mpi_task_chain(), Coord::Row, mat_a.tileSize(ik_idx),
+        panel[i] = hpx::dataflow(executor_mpi, time_it("row", "recv", comm::recv_tile_o<T>{}), mpi_task_chain(), Coord::Row, mat_a.tileSize(ik_idx),
                                       ik_rank.col());
       }
     }
@@ -235,12 +235,12 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
                         time_it(std::to_string(j), "herk", herk_trailing_diag_tile_o<T>{}),
                         panel[j], mat_a(jj_idx));
         if (j != nrtile - 1)
-          hpx::dataflow(executor_mpi, time_it("", "send", comm::send_tile_o<T>{}), mpi_task_chain(), Coord::Col, panel[j]);
+          hpx::dataflow(executor_mpi, time_it("col", "send", comm::send_tile_o<T>{}), mpi_task_chain(), Coord::Col, panel[j]);
       }
       else {
         GlobalTileIndex jk_idx(j, k);
         if (j != nrtile - 1)
-          panel[j] = hpx::dataflow(executor_mpi, time_it("", "recv", comm::recv_tile_o<T>{}), mpi_task_chain(), Coord::Col, mat_a.tileSize(jk_idx), jj_rank.row());
+          panel[j] = hpx::dataflow(executor_mpi, time_it("col", "recv", comm::recv_tile_o<T>{}), mpi_task_chain(), Coord::Col, mat_a.tileSize(jk_idx), jj_rank.row());
       }
 
       for (SizeType i = j + 1; i < nrtile; ++i) {
