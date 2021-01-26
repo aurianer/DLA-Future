@@ -93,7 +93,7 @@ void potrf(const blas::Uplo uplo, const Tile<T, device>& a) noexcept;
 template <class T, Device device>
 long long potrfInfo(const blas::Uplo uplo, const Tile<T, device>& a);
 
-#include "dlaf/lapack_tile.tpp"
+}
+}
 
-}
-}
+#include "dlaf/lapack_tile.tpp"

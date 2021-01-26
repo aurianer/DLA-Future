@@ -48,6 +48,7 @@ template <class T, Device device>
 void trsm(const blas::Side side, const blas::Uplo uplo, const blas::Op op, const blas::Diag diag,
           const T alpha, const Tile<const T, device>& a, const Tile<T, device>& b) noexcept;
 
+}
+}
+
 #include "dlaf/blas_tile.tpp"
-}
-}

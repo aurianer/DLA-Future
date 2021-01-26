@@ -8,6 +8,11 @@
 // SPDX-License-Identifier: BSD-3-Clause
 //
 
+#include <hpx/threading_base/annotated_function.hpp>
+
+namespace dlaf {
+namespace tile {
+
 template <class T, Device device>
 void gemm(const blas::Op op_a, const blas::Op op_b, const T alpha, const Tile<const T, device>& a,
           const Tile<const T, device>& b, const T beta, const Tile<T, device>& c) noexcept {
@@ -45,4 +50,7 @@ void trsm(const blas::Side side, const blas::Uplo uplo, const blas::Op op, const
   auto s = tile::internal::getTrsmSizes(side, a, b);
   blas::trsm(blas::Layout::ColMajor, side, uplo, op, diag, s.m, s.n, alpha, a.ptr(), a.ld(), b.ptr(),
              b.ld());
+}
+
+}
 }

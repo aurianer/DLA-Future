@@ -10,6 +10,11 @@
 
 #include "dlaf/common/assert.h"
 
+#include <hpx/threading_base/annotated_function.hpp>
+
+namespace dlaf {
+namespace tile {
+
 template <class T, Device device>
 void hegst(const int itype, const blas::Uplo uplo, const Tile<T, device>& a, const Tile<T, device>& b) {
   DLAF_ASSERT(square_size(a), a);
@@ -79,4 +84,7 @@ long long potrfInfo(const blas::Uplo uplo, const Tile<T, device>& a) {
   DLAF_ASSERT_HEAVY(info >= 0, info);
 
   return info;
+}
+
+}
 }

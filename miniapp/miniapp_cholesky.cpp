@@ -24,6 +24,7 @@
 #include "dlaf/util_matrix.h"
 
 #include "dlaf/common/timer.h"
+#include "dlaf/profiling/profiler.h"
 
 namespace {
 
@@ -169,6 +170,8 @@ int main(int argc, char** argv) {
   ;
   // clang-format on
 
+  dlaf::profiling::profiler::instance();
+
   hpx::init_params p;
   p.desc_cmdline = desc_commandline;
   p.rp_callback = [](auto& rp) {
@@ -209,8 +212,9 @@ void setUpperToZeroForDiagonalTiles(MatrixType& matrix) {
       continue;
 
     auto tile_set = unwrapping([](auto&& tile) {
-      lapack::laset(lapack::MatrixType::Upper, tile.size().rows() - 1, tile.size().cols() - 1, 0, 0,
-                    tile.ptr({0, 1}), tile.ld());
+      if (tile.size().rows() > 1)
+        lapack::laset(lapack::MatrixType::Upper, tile.size().rows() - 1, tile.size().cols() - 1, 0, 0,
+                      tile.ptr({0, 1}), tile.ld());
     });
 
     matrix(diag_tile).then(tile_set);

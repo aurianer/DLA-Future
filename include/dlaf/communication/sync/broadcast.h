@@ -55,6 +55,23 @@ void receive_from(const int broadcaster_rank, Communicator& communicator, DataOu
 }
 
 template <class T>
+struct send_tile_o {
+  void operator()(hpx::future<common::PromiseGuard<comm::CommunicatorGrid>> task_chain, Coord rc_comm,
+                  hpx::shared_future<matrix::Tile<const T, Device::CPU>> tile) {
+    using ConstTile_t = matrix::Tile<const T, Device::CPU>;
+    using PromiseComm_t = common::PromiseGuard<comm::CommunicatorGrid>;
+
+    auto send_bcast_f = [rc_comm](hpx::shared_future<ConstTile_t> ftile,
+                                  hpx::future<PromiseComm_t> fpcomm) {
+      PromiseComm_t pcomm = fpcomm.get();
+      comm::sync::broadcast::send(pcomm.ref().subCommunicator(rc_comm), ftile.get());
+    };
+
+    send_bcast_f(tile, std::move(task_chain));
+  }
+};
+
+template <class T>
 void send_tile(hpx::threads::executors::pool_executor ex,
                common::Pipeline<comm::CommunicatorGrid>& task_chain, Coord rc_comm,
                hpx::shared_future<matrix::Tile<const T, Device::CPU>> tile) {
@@ -71,9 +88,44 @@ void send_tile(hpx::threads::executors::pool_executor ex,
 }
 
 template <class T>
+struct recv_tile_o {
+  void operator()(hpx::future<common::PromiseGuard<comm::CommunicatorGrid>> mpi_task_chain,
+                  Coord rc_comm, hpx::future<matrix::Tile<T, Device::CPU>> tile, comm::IndexT_MPI rank) {
+    using PromiseComm_t = common::PromiseGuard<comm::CommunicatorGrid>;
+    using Tile_t = matrix::Tile<T, Device::CPU>;
+
+    auto recv_bcast_f = hpx::util::annotated_function(
+        [rank, rc_comm](hpx::future<PromiseComm_t> fpcomm, hpx::future<Tile_t> ftile) {
+          PromiseComm_t pcomm = fpcomm.get();
+          Tile_t tile = ftile.get();
+          comm::sync::broadcast::receive_from(rank, pcomm.ref().subCommunicator(rc_comm), tile);
+        },
+        "recv_tile");
+    recv_bcast_f(std::move(mpi_task_chain), std::move(tile));
+  }
+};
+
+template <class T>
+void recv_tile(hpx::threads::executors::pool_executor ex,
+               common::Pipeline<comm::CommunicatorGrid>& mpi_task_chain, Coord rc_comm,
+               hpx::future<matrix::Tile<T, Device::CPU>> tile, comm::IndexT_MPI rank) {
+  using PromiseComm_t = common::PromiseGuard<comm::CommunicatorGrid>;
+  using Tile_t = matrix::Tile<T, Device::CPU>;
+
+  auto recv_bcast_f = hpx::util::annotated_function(
+      [rank, rc_comm](hpx::future<PromiseComm_t> fpcomm, hpx::future<Tile_t> ftile) {
+        PromiseComm_t pcomm = fpcomm.get();
+        Tile_t tile = ftile.get();
+        comm::sync::broadcast::receive_from(rank, pcomm.ref().subCommunicator(rc_comm), tile);
+      },
+      "recv_tile");
+  hpx::dataflow(ex, std::move(recv_bcast_f), mpi_task_chain(), std::move(tile));
+}
+
+template <class T>
 hpx::future<matrix::Tile<const T, Device::CPU>> recv_tile(
     hpx::threads::executors::pool_executor ex, common::Pipeline<comm::CommunicatorGrid>& mpi_task_chain,
-    Coord rc_comm, TileElementSize tile_size, int rank) {
+    Coord rc_comm, TileElementSize tile_size, comm::IndexT_MPI rank) {
   using ConstTile_t = matrix::Tile<const T, Device::CPU>;
   using PromiseComm_t = common::PromiseGuard<comm::CommunicatorGrid>;
   using MemView_t = memory::MemoryView<T, Device::CPU>;

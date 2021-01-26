@@ -24,6 +24,7 @@
 #include "dlaf/communication/communicator_grid.h"
 #include "dlaf/communication/executor.h"
 #include "dlaf/communication/functions_sync.h"
+#include "dlaf/communication/sync/broadcast.h"
 #include "dlaf/factorization/cholesky/api.h"
 #include "dlaf/lapack_tile.h"
 #include "dlaf/matrix/distribution.h"
@@ -31,9 +32,18 @@
 #include "dlaf/memory/memory_view.h"
 #include "dlaf/util_matrix.h"
 
+#include "dlaf/profiling/profiler.h"
+
 namespace dlaf {
 namespace factorization {
 namespace internal {
+
+template <class T>
+struct potrf_diag_tile_o {
+  void operator()(hpx::future<matrix::Tile<T, Device::CPU>> matrix_tile) {
+    hpx::util::unwrapping(tile::potrf<T, Device::CPU>)(blas::Uplo::Lower, std::move(matrix_tile));
+  }
+};
 
 template <class T>
 void potrf_diag_tile(hpx::threads::executors::pool_executor executor_hp,
@@ -41,6 +51,16 @@ void potrf_diag_tile(hpx::threads::executors::pool_executor executor_hp,
   hpx::dataflow(executor_hp, hpx::util::unwrapping(tile::potrf<T, Device::CPU>), blas::Uplo::Lower,
                 std::move(matrix_tile));
 }
+
+template <class T>
+struct trsm_panel_tile_o {
+  void operator()(hpx::shared_future<matrix::Tile<const T, Device::CPU>> kk_tile,
+                  hpx::future<matrix::Tile<T, Device::CPU>> matrix_tile) {
+    hpx::util::unwrapping(tile::trsm<T, Device::CPU>)(blas::Side::Right, blas::Uplo::Lower,
+                                                      blas::Op::ConjTrans, blas::Diag::NonUnit, 1.0,
+                                                      std::move(kk_tile), std::move(matrix_tile));
+  }
+};
 
 template <class T>
 void trsm_panel_tile(hpx::threads::executors::pool_executor executor_hp,
@@ -52,12 +72,32 @@ void trsm_panel_tile(hpx::threads::executors::pool_executor executor_hp,
 }
 
 template <class T>
+struct herk_trailing_diag_tile_o {
+  void operator()(hpx::shared_future<matrix::Tile<const T, Device::CPU>> panel_tile,
+                  hpx::future<matrix::Tile<T, Device::CPU>> matrix_tile) {
+    hpx::util::unwrapping(tile::herk<T, Device::CPU>)(blas::Uplo::Lower, blas::Op::NoTrans, -1.0,
+                                                      panel_tile, 1.0, std::move(matrix_tile));
+  }
+};
+
+template <class T>
 void herk_trailing_diag_tile(hpx::threads::executors::pool_executor trailing_matrix_executor,
                              hpx::shared_future<matrix::Tile<const T, Device::CPU>> panel_tile,
                              hpx::future<matrix::Tile<T, Device::CPU>> matrix_tile) {
   hpx::dataflow(trailing_matrix_executor, hpx::util::unwrapping(tile::herk<T, Device::CPU>),
                 blas::Uplo::Lower, blas::Op::NoTrans, -1.0, panel_tile, 1.0, std::move(matrix_tile));
 }
+
+template <class T>
+struct gemm_trailing_matrix_tile_o {
+  void operator()(hpx::shared_future<matrix::Tile<const T, Device::CPU>> panel_tile,
+                  hpx::shared_future<matrix::Tile<const T, Device::CPU>> col_panel,
+                  hpx::future<matrix::Tile<T, Device::CPU>> matrix_tile) {
+    hpx::util::unwrapping(tile::gemm<T, Device::CPU>)(blas::Op::NoTrans, blas::Op::ConjTrans, -1.0,
+                                                      std::move(panel_tile), std::move(col_panel), 1.0,
+                                                      std::move(matrix_tile));
+  }
+};
 
 template <class T>
 void gemm_trailing_matrix_tile(hpx::threads::executors::pool_executor trailing_matrix_executor,
@@ -124,6 +164,8 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
   using hpx::threads::thread_priority_default;
   using comm::internal::mpi_pool_exists;
   using ConstTile_t = matrix::Tile<const T, Device::CPU>;
+
+  using dlaf::profiling::util::time_it;
 
   // Set up executor on the default queue with high priority.
   pool_executor executor_hp("default", thread_priority_high);
