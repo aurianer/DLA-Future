@@ -249,16 +249,19 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
       const LocalTileIndex ik_idx(i, distr.localTileFromGlobalTile<Coord::Col>(k));
 
       if (kk_rank.col() == this_rank.col()) {
-        hpx::dataflow(executor_hp, trsm_panel_tile_o<T>{}, diag_tiles.read(kk_offset), mat_a(ik_idx));
+        hpx::dataflow(executor_hp,
+                      time_it(std::to_string(i) + "/" + std::to_string(k), "trsm",
+                              trsm_panel_tile_o<T>{}),
+                      diag_tiles.read(kk_offset), mat_a(ik_idx));
 
         panel_col.set_tile(local_idx, mat_a.read(ik_idx));
 
-        hpx::dataflow(executor_mpi, time_it("row", "send", comm::send_tile_o<T>{}), mpi_task_chain(),
-                      Coord::Row, panel_col.read(local_idx));
+        hpx::dataflow(executor_mpi, time_it(std::to_string(i) + "row", "send", comm::send_tile_o<T>{}),
+                      mpi_task_chain(), Coord::Row, panel_col.read(local_idx));
       }
       else {
-        hpx::dataflow(executor_mpi, time_it("row", "recv", comm::recv_tile_o<T>{}), mpi_task_chain(),
-                      Coord::Row, panel_col(local_idx), kk_rank.col());
+        hpx::dataflow(executor_mpi, time_it(std::to_string(i) + "row", "recv", comm::recv_tile_o<T>{}),
+                      mpi_task_chain(), Coord::Row, panel_col(local_idx), kk_rank.col());
       }
     }
 
@@ -295,12 +298,12 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
 
         panel_col_t.set_tile({Coord::Col, j}, panel_col.read({Coord::Row, i}));
 
-        hpx::dataflow(executor_mpi, time_it("col", "send", comm::send_tile_o<T>{}), mpi_task_chain(),
-                      Coord::Col, panel_col_t.read({Coord::Col, j}));
+        hpx::dataflow(executor_mpi, time_it(std::to_string(j) + "col", "send", comm::send_tile_o<T>{}),
+                      mpi_task_chain(), Coord::Col, panel_col_t.read({Coord::Col, j}));
       }
       else {
-        hpx::dataflow(executor_mpi, time_it("col", "recv", comm::recv_tile_o<T>{}), mpi_task_chain(),
-                      Coord::Col, panel_col_t({Coord::Col, j}), owner.row());
+        hpx::dataflow(executor_mpi, time_it(std::to_string(j) + "col", "recv", comm::recv_tile_o<T>{}),
+                      mpi_task_chain(), Coord::Col, panel_col_t({Coord::Col, j}), owner.row());
       }
 
       for (SizeType i_idx = jt_idx + 1; i_idx < nrtile; ++i_idx) {
