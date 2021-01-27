@@ -158,7 +158,7 @@ template <class T>
 struct RoundRobin {
   template <class... Args>
   RoundRobin(std::size_t n, Args&& ... args) : next_index_(0) {
-    for (auto i = 0; i < n; ++i)
+    for (std::size_t i = 0; i < n; ++i)
       pool_.emplace_back(std::forward<Args>(args)...);
   }
 
@@ -189,7 +189,6 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
 
   // Set up MPI executor
   const comm::Index2D this_rank = grid.rank();
-  const auto grid_size = grid.size();
   auto executor_mpi = (mpi_pool_exists()) ? pool_executor("mpi", thread_priority_high) : executor_hp;
   common::Pipeline<comm::CommunicatorGrid> mpi_task_chain(std::move(grid));
 
