@@ -40,6 +40,7 @@ void send(Communicator& communicator, DataIn&& message_to_send) {
 
   dlaf::profiling::profile_scope _("send", "raw");
   auto message = comm::make_message(std::move(data));
+  std::cout << "send" << static_cast<const void*>(message.data()) << "\n";
   DLAF_MPI_CALL(MPI_Bcast(const_cast<DataT*>(message.data()), message.count(), message.mpi_type(),
                           communicator.rank(), communicator));
 }
@@ -53,6 +54,7 @@ void receive_from(const int broadcaster_rank, Communicator& communicator, DataOu
 
   dlaf::profiling::profile_scope _("recv", "raw");
   auto message = comm::make_message(common::make_data(std::forward<DataOut>(data)));
+  std::cout << "recv" << static_cast<const void*>(message.data()) << "\n";
   DLAF_MPI_CALL(
       MPI_Bcast(message.data(), message.count(), message.mpi_type(), broadcaster_rank, communicator));
 }
