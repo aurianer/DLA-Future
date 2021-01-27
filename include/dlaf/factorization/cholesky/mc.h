@@ -195,8 +195,6 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
   matrix::Distribution const& distr = mat_a.distribution();
   const SizeType nrtile = mat_a.nrTiles().cols();
 
-  matrix::Panel<Coord::Row, T, Device::CPU> diag_tiles(distr, {0, 0});
-
   constexpr std::size_t N_WORKSPACES = 1;
   RoundRobin<matrix::Panel<Coord::Col, T, Device::CPU>> panel_cols(N_WORKSPACES, distr, LocalTileIndex(0, 0));
   RoundRobin<matrix::Panel<Coord::Row, T, Device::CPU>> panel_cols_t(N_WORKSPACES, distr, LocalTileIndex(0, 0));
@@ -224,17 +222,17 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
                       time_it(std::to_string(kk_idx.row()), "potrf", potrf_diag_tile_o<T>{}),
                       mat_a(kk_idx));
 
-        diag_tiles.set_tile(kk_offset, mat_a.read(kk_idx));
+        panel_col_t.set_tile(kk_offset, mat_a.read(kk_idx));
         if (kk_idx.row() < nrtile - 1)
           hpx::dataflow(executor_mpi,
                         time_it(std::to_string(kk_idx.row()) + "diag", "send", comm::send_tile_o<T>{}),
-                        mpi_task_chain(), Coord::Col, diag_tiles.read(kk_offset));
+                        mpi_task_chain(), Coord::Col, panel_col_t.read(kk_offset));
       }
       else {
         if (kk_idx.row() < nrtile - 1)
           hpx::dataflow(executor_mpi,
                         time_it(std::to_string(kk_idx.row()) + "diag", "recv", comm::recv_tile_o<T>{}),
-                        mpi_task_chain(), Coord::Col, diag_tiles(kk_offset), kk_rank.row());
+                        mpi_task_chain(), Coord::Col, panel_col_t(kk_offset), kk_rank.row());
       }
     }
 
@@ -251,7 +249,7 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
         hpx::dataflow(executor_hp,
                       time_it(std::to_string(i) + "/" + std::to_string(k), "trsm",
                               trsm_panel_tile_o<T>{}),
-                      diag_tiles.read(kk_offset), mat_a(ik_idx));
+                      panel_col_t.read(kk_offset), mat_a(ik_idx));
 
         panel_col.set_tile(local_idx, mat_a.read(ik_idx));
 
