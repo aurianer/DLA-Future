@@ -197,7 +197,7 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
 
   matrix::Panel<Coord::Row, T, Device::CPU> diag_tiles(distr, {0, 0});
 
-  constexpr std::size_t N_WORKSPACES = 3;
+  constexpr std::size_t N_WORKSPACES = 1;
   RoundRobin<matrix::Panel<Coord::Col, T, Device::CPU>> panel_cols(N_WORKSPACES, distr, LocalTileIndex(0, 0));
   RoundRobin<matrix::Panel<Coord::Row, T, Device::CPU>> panel_cols_t(N_WORKSPACES, distr, LocalTileIndex(0, 0));
 
