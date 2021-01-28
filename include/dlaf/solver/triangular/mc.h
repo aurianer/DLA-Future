@@ -21,6 +21,7 @@
 #include "dlaf/communication/communicator_grid.h"
 #include "dlaf/communication/executor.h"
 #include "dlaf/communication/functions_sync.h"
+#include "dlaf/communication/sync/broadcast.h"
 #include "dlaf/lapack_tile.h"
 #include "dlaf/matrix/distribution.h"
 #include "dlaf/matrix/matrix.h"
@@ -407,6 +408,7 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(comm::CommunicatorGrid gr
   using hpx::threads::executors::pool_executor;
   using hpx::threads::thread_priority_high;
   using hpx::threads::thread_priority_default;
+  using hpx::dataflow;
   using comm::internal::mpi_pool_exists;
   using common::internal::vector;
   using ConstTileType = typename Matrix<T, Device::CPU>::ConstTileType;
@@ -442,11 +444,11 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(comm::CommunicatorGrid gr
         auto kk = LocalTileIndex{k_local_row, k_local_col};
 
         kk_tile = mat_a.read(kk);
-        comm::send_tile(executor_mpi, serial_comm, Coord::Row, mat_a.read(kk));
+        dataflow(executor_mpi, comm::send_tile_o, serial_comm(), Coord::Row, mat_a.read(kk));
       }
       else {
-        kk_tile = comm::recv_tile<T>(executor_mpi, serial_comm, Coord::Row,
-                                     mat_a.tileSize(GlobalTileIndex(k, k)), k_rank_col);
+        kk_tile = dataflow(executor_mpi, comm::recv_tile_with_alloc<T>, serial_comm(), Coord::Row,
+                           mat_a.tileSize(GlobalTileIndex(k, k)), k_rank_col);
       }
     }
 
@@ -460,13 +462,13 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(comm::CommunicatorGrid gr
         lln::trsm_B_panel_tile(executor_hp, diag, alpha, kk_tile, mat_b(kj));
         panel[j_local] = mat_b.read(kj);
         if (k != (mat_b.nrTiles().rows() - 1)) {
-          comm::send_tile(executor_mpi, serial_comm, Coord::Col, panel[j_local]);
+          dataflow(executor_mpi, comm::send_tile_o, serial_comm(), Coord::Col, panel[j_local]);
         }
       }
       else {
         if (k != (mat_b.nrTiles().rows() - 1)) {
-          panel[j_local] = comm::recv_tile<T>(executor_mpi, serial_comm, Coord::Col,
-                                              mat_b.tileSize(GlobalTileIndex(k, j)), k_rank_row);
+          panel[j_local] = dataflow(executor_mpi, comm::recv_tile_with_alloc<T>, serial_comm(),
+                                    Coord::Col, mat_b.tileSize(GlobalTileIndex(k, j)), k_rank_row);
         }
       }
     }
@@ -486,11 +488,11 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(comm::CommunicatorGrid gr
         auto ik = LocalTileIndex{i_local, k_local_col};
 
         ik_tile = mat_a.read(ik);
-        comm::send_tile(executor_mpi, serial_comm, Coord::Row, mat_a.read(ik));
+        dataflow(executor_mpi, comm::send_tile_o, serial_comm(), Coord::Row, mat_a.read(ik));
       }
       else {
-        ik_tile = comm::recv_tile<T>(executor_mpi, serial_comm, Coord::Row,
-                                     mat_a.tileSize(GlobalTileIndex(i, k)), k_rank_col);
+        ik_tile = dataflow(executor_mpi, comm::recv_tile_with_alloc<T>, serial_comm(), Coord::Row,
+                           mat_a.tileSize(GlobalTileIndex(i, k)), k_rank_col);
       }
 
       // Update trailing matrix

@@ -24,6 +24,7 @@
 #include "dlaf/communication/communicator_grid.h"
 #include "dlaf/communication/executor.h"
 #include "dlaf/communication/functions_sync.h"
+#include "dlaf/communication/sync/broadcast.h"
 #include "dlaf/factorization/cholesky/api.h"
 #include "dlaf/lapack_tile.h"
 #include "dlaf/matrix/distribution.h"
@@ -122,6 +123,7 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
   using hpx::threads::executors::pool_executor;
   using hpx::threads::thread_priority_high;
   using hpx::threads::thread_priority_default;
+  using hpx::dataflow;
   using comm::internal::mpi_pool_exists;
   using ConstTile_t = matrix::Tile<const T, Device::CPU>;
 
@@ -150,12 +152,12 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
       potrf_diag_tile(executor_hp, mat_a(kk_idx));
       panel[k] = mat_a.read(kk_idx);
       if (k != nrtile - 1)
-        comm::send_tile(executor_mpi, mpi_task_chain, Coord::Col, panel[k]);
+        dataflow(executor_mpi, comm::send_tile_o, mpi_task_chain(), Coord::Col, panel[k]);
     }
     else if (this_rank.col() == kk_rank.col()) {
       if (k != nrtile - 1)
-        panel[k] = comm::recv_tile<T>(executor_mpi, mpi_task_chain, Coord::Col, mat_a.tileSize(kk_idx),
-                                      kk_rank.row());
+        panel[k] = dataflow(executor_mpi, comm::recv_tile_with_alloc<T>, mpi_task_chain(), Coord::Col,
+                            mat_a.tileSize(kk_idx), kk_rank.row());
     }
 
     // Iterate over the k-th column
@@ -166,11 +168,11 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
       if (this_rank == ik_rank) {
         trsm_panel_tile(executor_hp, panel[k], mat_a(ik_idx));
         panel[i] = mat_a.read(ik_idx);
-        comm::send_tile(executor_mpi, mpi_task_chain, Coord::Row, panel[i]);
+        dataflow(executor_mpi, comm::send_tile_o, mpi_task_chain(), Coord::Row, panel[i]);
       }
       else if (this_rank.row() == ik_rank.row()) {
-        panel[i] = comm::recv_tile<T>(executor_mpi, mpi_task_chain, Coord::Row, mat_a.tileSize(ik_idx),
-                                      ik_rank.col());
+        panel[i] = dataflow(executor_mpi, comm::recv_tile_with_alloc<T>, mpi_task_chain(), Coord::Row,
+                            mat_a.tileSize(ik_idx), ik_rank.col());
       }
     }
 
@@ -187,13 +189,13 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
         pool_executor trailing_matrix_executor = (j == k + 1) ? executor_hp : executor_normal;
         herk_trailing_diag_tile(trailing_matrix_executor, panel[j], mat_a(jj_idx));
         if (j != nrtile - 1)
-          comm::send_tile(executor_mpi, mpi_task_chain, Coord::Col, panel[j]);
+          dataflow(executor_mpi, comm::send_tile_o, mpi_task_chain(), Coord::Col, panel[j]);
       }
       else {
         GlobalTileIndex jk_idx(j, k);
         if (j != nrtile - 1)
-          panel[j] = comm::recv_tile<T>(executor_mpi, mpi_task_chain, Coord::Col, mat_a.tileSize(jk_idx),
-                                        jj_rank.row());
+          panel[j] = dataflow(executor_mpi, comm::recv_tile_with_alloc<T>, mpi_task_chain(), Coord::Col,
+                              mat_a.tileSize(jk_idx), jj_rank.row());
       }
 
       for (SizeType i = j + 1; i < nrtile; ++i) {
