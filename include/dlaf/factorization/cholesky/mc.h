@@ -31,7 +31,7 @@
 #include "dlaf/memory/memory_view.h"
 #include "dlaf/util_matrix.h"
 
-#include "dlaf/profiling/profiler.h"
+#include "dlaf/common/trace_utils.h"
 
 namespace dlaf {
 namespace factorization {
@@ -180,8 +180,6 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
   using hpx::threads::thread_priority_default;
   using comm::internal::mpi_pool_exists;
 
-  using dlaf::profiling::util::time_it;
-
   // Set up executor on the default queue with high priority.
   pool_executor executor_hp("default", thread_priority_high);
   // Set up executor on the default queue with default priority.
@@ -219,19 +217,19 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
     if (kk_rank.col() == this_rank.col()) {
       if (kk_rank.row() == this_rank.row()) {
         hpx::dataflow(executor_hp,
-                      time_it(std::to_string(kk_idx.row()), "potrf", potrf_diag_tile_o<T>{}),
+                      DLAF_TRACE(potrf_diag_tile_o<T>{}, std::to_string(kk_idx.row()), "potrf"),
                       mat_a(kk_idx));
 
         panel_col_t.set_tile(kk_offset, mat_a.read(kk_idx));
         if (kk_idx.row() < nrtile - 1)
           hpx::dataflow(executor_mpi,
-                        time_it(std::to_string(kk_idx.row()) + "diag", "send", comm::send_tile_o<T>{}),
+                        DLAF_TRACE(comm::send_tile_o<T>{}, std::to_string(kk_idx.row()) + "diag", "send"),
                         mpi_task_chain(), Coord::Col, panel_col_t.read(kk_offset));
       }
       else {
         if (kk_idx.row() < nrtile - 1)
           hpx::dataflow(executor_mpi,
-                        time_it(std::to_string(kk_idx.row()) + "diag", "recv", comm::recv_tile_o<T>{}),
+                        DLAF_TRACE(comm::recv_tile_o<T>{}, std::to_string(kk_idx.row()) + "diag", "recv"),
                         mpi_task_chain(), Coord::Col, panel_col_t(kk_offset), kk_rank.row());
       }
     }
@@ -247,17 +245,16 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
 
       if (kk_rank.col() == this_rank.col()) {
         hpx::dataflow(executor_hp,
-                      time_it(std::to_string(i) + "/" + std::to_string(k), "trsm",
-                              trsm_panel_tile_o<T>{}),
+                      DLAF_TRACE(trsm_panel_tile_o<T>{}, std::to_string(i) + "/" + std::to_string(k), "trsm"),
                       panel_col_t.read(kk_offset), mat_a(ik_idx));
 
         panel_col.set_tile(local_idx, mat_a.read(ik_idx));
 
-        hpx::dataflow(executor_mpi, time_it(std::to_string(i) + "row", "send", comm::send_tile_o<T>{}),
+        hpx::dataflow(executor_mpi, DLAF_TRACE(comm::send_tile_o<T>{}, std::to_string(i) + "row", "send"),
                       mpi_task_chain(), Coord::Row, panel_col.read(local_idx));
       }
       else {
-        hpx::dataflow(executor_mpi, time_it(std::to_string(i) + "row", "recv", comm::recv_tile_o<T>{}),
+        hpx::dataflow(executor_mpi, DLAF_TRACE(comm::recv_tile_o<T>{}, std::to_string(i) + "row", "recv"),
                       mpi_task_chain(), Coord::Row, panel_col(local_idx), kk_rank.col());
       }
     }
@@ -271,7 +268,7 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
 
       if (this_rank == tl_rank) {
         const auto tl = distr.localTileIndex(tl_idx);
-        hpx::dataflow(executor_hp, time_it("first!", "herk", herk_trailing_diag_tile_o<T>{}),
+        hpx::dataflow(executor_hp, DLAF_TRACE(herk_trailing_diag_tile_o<T>{}, "first!", "herk"),
                       panel_col.read(tl), mat_a(tl));
       }
     }
@@ -289,19 +286,19 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
 
         if (jt_idx != k + 1) {
           hpx::dataflow(executor_normal,
-                        time_it(std::to_string(jt_idx), "herk", herk_trailing_diag_tile_o<T>{}),
+                        DLAF_TRACE(herk_trailing_diag_tile_o<T>{}, std::to_string(jt_idx), "herk"),
                         panel_col.read({Coord::Row, i}), mat_a(LocalTileIndex{i, j}));
         }
 
         panel_col_t.set_tile({Coord::Col, j}, panel_col.read({Coord::Row, i}));
 
         if (jt_idx < nrtile - 1)
-          hpx::dataflow(executor_mpi, time_it(std::to_string(j) + "col", "send", comm::send_tile_o<T>{}),
+          hpx::dataflow(executor_mpi, DLAF_TRACE(comm::send_tile_o<T>{}, std::to_string(j) + "col", "send"),
               mpi_task_chain(), Coord::Col, panel_col_t.read({Coord::Col, j}));
       }
       else {
         if (jt_idx < nrtile - 1)
-          hpx::dataflow(executor_mpi, time_it(std::to_string(j) + "col", "recv", comm::recv_tile_o<T>{}),
+          hpx::dataflow(executor_mpi, DLAF_TRACE(comm::recv_tile_o<T>{}, std::to_string(j) + "col", "recv"),
               mpi_task_chain(), Coord::Col, panel_col_t({Coord::Col, j}), owner.row());
       }
 
@@ -313,8 +310,7 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
 
         const auto i = distr.localTileFromGlobalTile<Coord::Row>(i_idx);
         hpx::dataflow(executor_normal,
-                      time_it(std::to_string(i) + ";" + std::to_string(j), "gemm",
-                              gemm_trailing_matrix_tile_o<T>{}),
+                      DLAF_TRACE(gemm_trailing_matrix_tile_o<T>{}, std::to_string(i) + ";" + std::to_string(j), "gemm"),
                       panel_col.read({Coord::Row, i}), panel_col_t.read({Coord::Col, j}),
                       mat_a(LocalTileIndex{i, j}));
       }
