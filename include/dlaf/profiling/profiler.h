@@ -236,7 +236,7 @@ namespace util {
 /// Measure the execution time of the callable
 /// @return a proxy callable with the same arguments of the given one
 template <class Func>
-auto time_it(std::string name, std::string group, Func&& target_function) {
+auto time_it(Func&& target_function, std::string name, std::string group) {
   return [name, group, function = std::forward<Func>(target_function)](auto&&... args) mutable {
     profile_scope _(name, group);
     return function(std::forward<decltype(args)>(args)...);
