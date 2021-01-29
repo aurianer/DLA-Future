@@ -100,7 +100,7 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(blas::Diag diag, T alpha,
       auto kj = LocalTileIndex{k, j};
 
       // Triangular solve of k-th row Panel of B
-      dataflow(executor_hp, lln::trsm_B_panel_tile, diag, alpha, mat_a.read(LocalTileIndex{k, k}),
+      dataflow(executor_hp, lln::trsm_B_panel_tile_o, diag, alpha, mat_a.read(LocalTileIndex{k, k}),
                mat_b(kj));
 
       for (SizeType i = k + 1; i < m; ++i) {
@@ -108,7 +108,7 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(blas::Diag diag, T alpha,
         auto trailing_executor = (i == k + 1) ? executor_hp : executor_normal;
         auto beta = static_cast<T>(-1.0) / alpha;
         // Update trailing matrix
-        dataflow(trailing_executor, lln::gemm_trailing_matrix_tile, beta,
+        dataflow(trailing_executor, lln::gemm_trailing_matrix_tile_o, beta,
                  mat_a.read(LocalTileIndex{i, k}), mat_b.read(kj), mat_b(LocalTileIndex{i, j}));
       }
     }
@@ -465,7 +465,7 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(comm::CommunicatorGrid gr
       if (mat_b.rankIndex().row() == k_rank_row) {
         auto k_local_row = distr_b.localTileFromGlobalTile<Coord::Row>(k);
         auto kj = LocalTileIndex{k_local_row, j_local};
-        lln::trsm_B_panel_tile(executor_hp, diag, alpha, kk_tile, mat_b(kj));
+        dataflow(executor_hp, lln::trsm_B_panel_tile_o, diag, alpha, kk_tile, mat_b(kj));
         panel[j_local] = mat_b.read(kj);
         if (k != (mat_b.nrTiles().rows() - 1)) {
           dataflow(executor_mpi, comm::send_tile_o, serial_comm(), Coord::Col, panel[j_local]);
@@ -504,7 +504,7 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(comm::CommunicatorGrid gr
       // Update trailing matrix
       for (SizeType j_local = 0; j_local < b_local_cols; ++j_local) {
         T beta = T(-1.0) / alpha;
-        lln::gemm_trailing_matrix_tile(trailing_executor, beta, ik_tile, panel[j_local],
+        dataflow(trailing_executor, lln::gemm_trailing_matrix_tile_o, beta, ik_tile, panel[j_local],
                                        mat_b(LocalTileIndex{i_local, j_local}));
       }
     }
