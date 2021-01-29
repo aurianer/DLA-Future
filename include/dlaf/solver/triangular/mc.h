@@ -56,22 +56,26 @@ struct Triangular<Backend::MC, Device::CPU, T> {
 
 namespace lln {
 template <class T>
-void trsm_B_panel_tile(hpx::threads::executors::pool_executor ex, blas::Diag diag, T alpha,
+void trsm_B_panel_tile(blas::Diag diag, T alpha,
                        hpx::shared_future<matrix::Tile<const T, Device::CPU>> in_tile,
                        hpx::future<matrix::Tile<T, Device::CPU>> out_tile) {
-  hpx::dataflow(ex, hpx::util::unwrapping(tile::trsm<T, Device::CPU>), blas::Side::Left,
-                blas::Uplo::Lower, blas::Op::NoTrans, diag, alpha, std::move(in_tile),
-                std::move(out_tile));
+  hpx::util::unwrapping(tile::trsm<T, Device::CPU>)(blas::Side::Left, blas::Uplo::Lower,
+                                                    blas::Op::NoTrans, diag, alpha, std::move(in_tile),
+                                                    std::move(out_tile));
 }
 
+DLAF_MAKE_CALLABLE_OBJECT(trsm_B_panel_tile);
+
 template <class T>
-void gemm_trailing_matrix_tile(hpx::threads::executors::pool_executor ex, T beta,
-                               hpx::shared_future<matrix::Tile<const T, Device::CPU>> a_tile,
+void gemm_trailing_matrix_tile(T beta, hpx::shared_future<matrix::Tile<const T, Device::CPU>> a_tile,
                                hpx::shared_future<matrix::Tile<const T, Device::CPU>> b_tile,
                                hpx::future<matrix::Tile<T, Device::CPU>> c_tile) {
-  hpx::dataflow(ex, hpx::util::unwrapping(tile::gemm<T, Device::CPU>), blas::Op::NoTrans,
-                blas::Op::NoTrans, beta, std::move(a_tile), std::move(b_tile), 1.0, std::move(c_tile));
+  hpx::util::unwrapping(tile::gemm<T, Device::CPU>)(blas::Op::NoTrans, blas::Op::NoTrans, beta,
+                                                    std::move(a_tile), std::move(b_tile), 1.0,
+                                                    std::move(c_tile));
 }
+
+DLAF_MAKE_CALLABLE_OBJECT(gemm_trailing_matrix_tile);
 }
 
 template <class T>
@@ -81,6 +85,7 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(blas::Diag diag, T alpha,
   using hpx::threads::executors::pool_executor;
   using hpx::threads::thread_priority_high;
   using hpx::threads::thread_priority_default;
+  using hpx::dataflow;
 
   // Set up executor on the default queue with high priority.
   pool_executor executor_hp("default", thread_priority_high);
@@ -95,15 +100,16 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(blas::Diag diag, T alpha,
       auto kj = LocalTileIndex{k, j};
 
       // Triangular solve of k-th row Panel of B
-      lln::trsm_B_panel_tile(executor_hp, diag, alpha, mat_a.read(LocalTileIndex{k, k}), mat_b(kj));
+      dataflow(executor_hp, lln::trsm_B_panel_tile, diag, alpha, mat_a.read(LocalTileIndex{k, k}),
+               mat_b(kj));
 
       for (SizeType i = k + 1; i < m; ++i) {
         // Choose queue priority
         auto trailing_executor = (i == k + 1) ? executor_hp : executor_normal;
         auto beta = static_cast<T>(-1.0) / alpha;
         // Update trailing matrix
-        lln::gemm_trailing_matrix_tile(trailing_executor, beta, mat_a.read(LocalTileIndex{i, k}),
-                                       mat_b.read(kj), mat_b(LocalTileIndex{i, j}));
+        dataflow(trailing_executor, lln::gemm_trailing_matrix_tile, beta,
+                 mat_a.read(LocalTileIndex{i, k}), mat_b.read(kj), mat_b(LocalTileIndex{i, j}));
       }
     }
   }
