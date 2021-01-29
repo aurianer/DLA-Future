@@ -72,7 +72,8 @@ private:
   /// @return current time in nanoseconds on the reference clock
   std::size_t get_time() {
     using namespace std::chrono;
-    return duration_cast<nanoseconds>(clock_t::now().time_since_epoch()).count();
+    using ns = nanoseconds;
+    return static_cast<size_t>(duration_cast<ns>(clock_t::now().time_since_epoch()).count());
   };
 };
 
