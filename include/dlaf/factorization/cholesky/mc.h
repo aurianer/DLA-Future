@@ -197,7 +197,9 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
       // Broadcast the jk-tile along the j-th column and update the jj-tile
       if (this_rank.row() == jj_rank.row()) {
         parallel_executor trailing_matrix_executor = (j == k + 1) ? executor_hp : executor_normal;
-        dataflow(trailing_matrix_executor, herk_trailing_diag_tile_o, panel[j], mat_a(jj_idx));
+        std::ostringstream name;
+        name << "herk" << kk_idx;
+        dataflow(trailing_matrix_executor, hpx::util::annotated_function(herk_trailing_diag_tile_o, name.str()), panel[j], mat_a(jj_idx));
         if (j != nrtile - 1)
           dataflow(executor_mpi, comm::send_tile_o, mpi_task_chain(), Coord::Col, panel[j]);
       }
