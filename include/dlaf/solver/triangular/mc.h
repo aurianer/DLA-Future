@@ -21,6 +21,7 @@
 #include "dlaf/common/vector.h"
 #include "dlaf/communication/communicator_grid.h"
 #include "dlaf/communication/functions_sync.h"
+#include "dlaf/communication/sync/broadcast.h"
 #include "dlaf/lapack_tile.h"
 #include "dlaf/matrix/distribution.h"
 #include "dlaf/matrix/matrix.h"
@@ -55,22 +56,26 @@ struct Triangular<Backend::MC, Device::CPU, T> {
 
 namespace lln {
 template <class T>
-void trsm_B_panel_tile(hpx::execution::parallel_executor ex, blas::Diag diag, T alpha,
+void trsm_B_panel_tile(blas::Diag diag, T alpha,
                        hpx::shared_future<matrix::Tile<const T, Device::CPU>> in_tile,
                        hpx::future<matrix::Tile<T, Device::CPU>> out_tile) {
-  hpx::dataflow(ex, hpx::util::unwrapping(tile::trsm<T, Device::CPU>), blas::Side::Left,
-                blas::Uplo::Lower, blas::Op::NoTrans, diag, alpha, std::move(in_tile),
-                std::move(out_tile));
+  hpx::util::unwrapping(tile::trsm<T, Device::CPU>)(blas::Side::Left, blas::Uplo::Lower,
+                                                    blas::Op::NoTrans, diag, alpha, std::move(in_tile),
+                                                    std::move(out_tile));
 }
 
+DLAF_MAKE_CALLABLE_OBJECT(trsm_B_panel_tile);
+
 template <class T>
-void gemm_trailing_matrix_tile(hpx::execution::parallel_executor ex, T beta,
-                               hpx::shared_future<matrix::Tile<const T, Device::CPU>> a_tile,
+void gemm_trailing_matrix_tile(T beta, hpx::shared_future<matrix::Tile<const T, Device::CPU>> a_tile,
                                hpx::shared_future<matrix::Tile<const T, Device::CPU>> b_tile,
                                hpx::future<matrix::Tile<T, Device::CPU>> c_tile) {
-  hpx::dataflow(ex, hpx::util::unwrapping(tile::gemm<T, Device::CPU>), blas::Op::NoTrans,
-                blas::Op::NoTrans, beta, std::move(a_tile), std::move(b_tile), 1.0, std::move(c_tile));
+  hpx::util::unwrapping(tile::gemm<T, Device::CPU>)(blas::Op::NoTrans, blas::Op::NoTrans, beta,
+                                                    std::move(a_tile), std::move(b_tile), 1.0,
+                                                    std::move(c_tile));
 }
+
+DLAF_MAKE_CALLABLE_OBJECT(gemm_trailing_matrix_tile);
 }
 
 template <class T>
@@ -80,6 +85,7 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(blas::Diag diag, T alpha,
   using hpx::execution::parallel_executor;
   using hpx::resource::get_thread_pool;
   using hpx::threads::thread_priority;
+  using hpx::dataflow;
 
   parallel_executor executor_hp(&get_thread_pool("default"), thread_priority::high);
   parallel_executor executor_normal(&get_thread_pool("default"), thread_priority::default_);
@@ -92,15 +98,16 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(blas::Diag diag, T alpha,
       auto kj = LocalTileIndex{k, j};
 
       // Triangular solve of k-th row Panel of B
-      lln::trsm_B_panel_tile(executor_hp, diag, alpha, mat_a.read(LocalTileIndex{k, k}), mat_b(kj));
+      dataflow(executor_hp, lln::trsm_B_panel_tile_o, diag, alpha, mat_a.read(LocalTileIndex{k, k}),
+               mat_b(kj));
 
       for (SizeType i = k + 1; i < m; ++i) {
         // Choose queue priority
         auto trailing_executor = (i == k + 1) ? executor_hp : executor_normal;
         auto beta = static_cast<T>(-1.0) / alpha;
         // Update trailing matrix
-        lln::gemm_trailing_matrix_tile(trailing_executor, beta, mat_a.read(LocalTileIndex{i, k}),
-                                       mat_b.read(kj), mat_b(LocalTileIndex{i, j}));
+        dataflow(trailing_executor, lln::gemm_trailing_matrix_tile_o, beta,
+                 mat_a.read(LocalTileIndex{i, k}), mat_b.read(kj), mat_b(LocalTileIndex{i, j}));
       }
     }
   }
@@ -117,6 +124,8 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLT(blas::Op op, blas::Diag d
   using hpx::execution::parallel_executor;
   using hpx::resource::get_thread_pool;
   using hpx::threads::thread_priority;
+
+  auto recv_tile_with_alloc = comm::recv_tile_with_alloc<T>;
 
   parallel_executor executor_hp(&get_thread_pool("default"), thread_priority::high);
   parallel_executor executor_normal(&get_thread_pool("default"), thread_priority::default_);
@@ -395,6 +404,8 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(comm::CommunicatorGrid gr
   using common::internal::vector;
   using ConstTileType = typename Matrix<T, Device::CPU>::ConstTileType;
 
+  auto recv_tile_with_alloc = comm::recv_tile_with_alloc<T>;
+
   parallel_executor executor_hp(&get_thread_pool("default"), thread_priority::high);
   parallel_executor executor_normal(&get_thread_pool("default"), thread_priority::default_);
 
@@ -428,11 +439,11 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(comm::CommunicatorGrid gr
         auto kk = LocalTileIndex{k_local_row, k_local_col};
 
         kk_tile = mat_a.read(kk);
-        comm::send_tile(executor_mpi, serial_comm, Coord::Row, mat_a.read(kk));
+        dataflow(executor_mpi, comm::send_tile_o, serial_comm(), Coord::Row, mat_a.read(kk));
       }
       else {
-        kk_tile = comm::recv_tile<T>(executor_mpi, serial_comm, Coord::Row,
-                                     mat_a.tileSize(GlobalTileIndex(k, k)), k_rank_col);
+        kk_tile = dataflow(executor_mpi, recv_tile_with_alloc, serial_comm(), Coord::Row,
+                           mat_a.tileSize(GlobalTileIndex(k, k)), k_rank_col);
       }
     }
 
@@ -443,16 +454,16 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(comm::CommunicatorGrid gr
       if (mat_b.rankIndex().row() == k_rank_row) {
         auto k_local_row = distr_b.localTileFromGlobalTile<Coord::Row>(k);
         auto kj = LocalTileIndex{k_local_row, j_local};
-        lln::trsm_B_panel_tile(executor_hp, diag, alpha, kk_tile, mat_b(kj));
+        dataflow(executor_hp, lln::trsm_B_panel_tile_o, diag, alpha, kk_tile, mat_b(kj));
         panel[j_local] = mat_b.read(kj);
         if (k != (mat_b.nrTiles().rows() - 1)) {
-          comm::send_tile(executor_mpi, serial_comm, Coord::Col, panel[j_local]);
+          dataflow(executor_mpi, comm::send_tile_o, serial_comm(), Coord::Col, panel[j_local]);
         }
       }
       else {
         if (k != (mat_b.nrTiles().rows() - 1)) {
-          panel[j_local] = comm::recv_tile<T>(executor_mpi, serial_comm, Coord::Col,
-                                              mat_b.tileSize(GlobalTileIndex(k, j)), k_rank_row);
+          panel[j_local] = dataflow(executor_mpi, recv_tile_with_alloc, serial_comm(),
+                                    Coord::Col, mat_b.tileSize(GlobalTileIndex(k, j)), k_rank_row);
         }
       }
     }
@@ -472,17 +483,17 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(comm::CommunicatorGrid gr
         auto ik = LocalTileIndex{i_local, k_local_col};
 
         ik_tile = mat_a.read(ik);
-        comm::send_tile(executor_mpi, serial_comm, Coord::Row, mat_a.read(ik));
+        dataflow(executor_mpi, comm::send_tile_o, serial_comm(), Coord::Row, mat_a.read(ik));
       }
       else {
-        ik_tile = comm::recv_tile<T>(executor_mpi, serial_comm, Coord::Row,
-                                     mat_a.tileSize(GlobalTileIndex(i, k)), k_rank_col);
+        ik_tile = dataflow(executor_mpi, recv_tile_with_alloc, serial_comm(), Coord::Row,
+                           mat_a.tileSize(GlobalTileIndex(i, k)), k_rank_col);
       }
 
       // Update trailing matrix
       for (SizeType j_local = 0; j_local < b_local_cols; ++j_local) {
         T beta = T(-1.0) / alpha;
-        lln::gemm_trailing_matrix_tile(trailing_executor, beta, ik_tile, panel[j_local],
+        dataflow(trailing_executor, lln::gemm_trailing_matrix_tile_o, beta, ik_tile, panel[j_local],
                                        mat_b(LocalTileIndex{i_local, j_local}));
       }
     }
