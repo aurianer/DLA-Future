@@ -15,6 +15,8 @@
 #include <hpx/include/threads.hpp>
 #include <hpx/include/util.hpp>
 
+#include <hpx/threading_base/annotated_function.hpp>
+#include <sstream>
 #include <unordered_map>
 
 #include "dlaf/blas_tile.h"
@@ -199,14 +201,16 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
         parallel_executor trailing_matrix_executor = (j == k + 1) ? executor_hp : executor_normal;
         std::ostringstream name;
         name << "herk" << kk_idx;
-        dataflow(trailing_matrix_executor, hpx::util::annotated_function(herk_trailing_diag_tile_o, name.str()), panel[j], mat_a(jj_idx));
+        dataflow(trailing_matrix_executor, hpx::util::annotated_function(herk_trailing_diag_tile_o, name.str().c_str()), panel[j], mat_a(jj_idx));
         if (j != nrtile - 1)
           dataflow(executor_mpi, comm::send_tile_o, mpi_task_chain(), Coord::Col, panel[j]);
       }
       else {
         GlobalTileIndex jk_idx(j, k);
+        std::ostringstream ss;
+        ss << "recv_tile" << jk_idx ;
         if (j != nrtile - 1)
-          panel[j] = dataflow(executor_mpi, recv_tile_with_alloc, mpi_task_chain(), Coord::Col,
+          panel[j] = dataflow(executor_mpi, hpx::util::annotated_function(recv_tile_with_alloc, ss.str().c_str()), mpi_task_chain(), Coord::Col,
                               mat_a.tileSize(jk_idx), jj_rank.row());
       }
 
