@@ -131,6 +131,7 @@ protected:
               dist_matrix_.localNrTiles().get(component(dir)) - offset_, 1)
             ))
   {
+    std::cout << BaseT::read(LocalTileIndex{0, 0}).get().ptr() << "\n";
     // TODO remove this and enable util::set (for setting to zero for red2band)
     // util::set(static_cast<Matrix<T, device>&>(*this), [](const auto&) { return 0; });
 

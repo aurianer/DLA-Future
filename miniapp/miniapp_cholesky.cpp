@@ -8,10 +8,12 @@
 // SPDX-License-Identifier: BSD-3-Clause
 //
 
+#include <chrono>
 #include <iostream>
 
 #include <mpi.h>
 #include <hpx/init.hpp>
+#include <thread>
 
 #include "dlaf/auxiliary/norm.h"
 #include "dlaf/communication/communicator_grid.h"
@@ -138,6 +140,8 @@ int hpx_main(hpx::program_options::variables_map& vm) {
 
     // (optional) run test
     if (opts.do_check != CHECK_RESULT::NONE) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
       if (opts.do_check == CHECK_RESULT::LAST && run_index != (opts.nruns - 1))
         continue;
 
@@ -145,6 +149,8 @@ int hpx_main(hpx::program_options::variables_map& vm) {
       copy(matrix_ref, original);
       check_cholesky(original, matrix, comm_grid);
     }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
   }
 
   return hpx::finalize();
