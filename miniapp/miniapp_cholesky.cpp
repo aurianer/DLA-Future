@@ -216,8 +216,9 @@ void setUpperToZeroForDiagonalTiles(MatrixType& matrix) {
       continue;
 
     auto tile_set = unwrapping([](auto&& tile) {
-      lapack::laset(lapack::MatrixType::Upper, tile.size().rows() - 1, tile.size().cols() - 1, 0, 0,
-                    tile.ptr({0, 1}), tile.ld());
+      if (tile.size().rows() > 1)
+        lapack::laset(lapack::MatrixType::Upper, tile.size().rows() - 1, tile.size().cols() - 1, 0, 0,
+                      tile.ptr({0, 1}), tile.ld());
     });
 
     matrix(diag_tile).then(tile_set);
