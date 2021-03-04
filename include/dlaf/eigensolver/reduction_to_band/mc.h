@@ -634,6 +634,11 @@ void update_a(const LocalTileIndex& at_start, MatrixT<T>& a, ConstPanelT<Coord::
 template <class T>
 std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Device::CPU, T>::call(
     comm::CommunicatorGrid grid, Matrix<T, Device::CPU>& mat_a) {
+  using hpx::execution::parallel_executor;
+  using hpx::resource::get_thread_pool;
+  using hpx::resource::pool_exists;
+  using hpx::threads::thread_priority;
+
   using namespace comm;
   using namespace comm::sync;
 
@@ -643,6 +648,13 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
   using matrix::Distribution;
 
   using factorization::internal::computeTFactor;
+
+  parallel_executor executor_hp(&get_thread_pool("default"), thread_priority::high);
+  parallel_executor executor_normal(&get_thread_pool("default"), thread_priority::default_);
+
+  auto executor_mpi = (pool_exists("mpi"))
+                          ? parallel_executor(&get_thread_pool("mpi"), thread_priority::high)
+                          : executor_hp;
 
   const auto& dist = mat_a.distribution();
   const comm::Index2D rank = dist.rankIndex();
