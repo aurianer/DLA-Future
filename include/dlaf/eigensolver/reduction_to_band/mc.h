@@ -656,9 +656,15 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
 
   std::vector<hpx::shared_future<std::vector<T>>> taus;
 
+  PanelT<Coord::Col, T> v(dist);
+  PanelT<Coord::Row, T> vt(dist);
+  PanelT<Coord::Col, T> w(dist);
+  PanelT<Coord::Row, T> wt(dist);
+  PanelT<Coord::Col, T> x(dist);
+  PanelT<Coord::Row, T> xt(dist);
+
   for (SizeType j_panel = 0; j_panel < (dist.nrTiles().cols() - 1); ++j_panel) {
     MatrixT<T> t(dist_block);   // used just by the column
-    MatrixT<T> v0(dist_block);  // used just by the owner
 
     const GlobalTileIndex Ai_start_global{j_panel + 1, j_panel};
     const GlobalTileIndex At_start_global{Ai_start_global + GlobalTileSize{0, 1}};
@@ -680,7 +686,7 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
 
     const bool is_panel_rank_col = rank_v0.col() == rank.col();
 
-    PanelT<Coord::Col, T> v(dist, At_start);
+    v.set_offset(At_start);
 
     // 1. PANEL
     if (is_panel_rank_col) {
@@ -746,30 +752,30 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
       }
     }
 
-    PanelT<Coord::Row, T> vt(dist, At_start);
-    matrix::broadcast(rank_v0.col(), v, vt, serial_comm);
+    vt.set_offset(At_start);
+    matrix::broadcast(executor_mpi, rank_v0.col(), v, vt, serial_comm);
 
-    // 3 UPDATE TRAILING MATRIX
-    // 3A COMPUTE W
-    PanelT<Coord::Col, T> w(dist, At_start);
+    // UPDATE TRAILING MATRIX
+
+    // COMPUTE W
+    // W = V . T
+    w.set_offset(At_start);
 
     if (is_panel_rank_col)
-      compute_w(w, v, t);  // TRMM W = V . T
+      compute_w(w, v, t);
 
-    PanelT<Coord::Row, T> wt(dist, At_start);
-    matrix::broadcast(rank_v0.col(), w, wt, serial_comm);
-
-    // 3B COMPUTE X
+    wt.set_offset(At_start);
+    matrix::broadcast(executor_mpi, rank_v0.col(), w, wt, serial_comm);
 
     // Since At is hermitian, just the lower part is referenced.
     // When the tile is not part of the main diagonal, the same tile has to be used for two computations
     // that will contribute to two different rows of X: the ones indexed with row and col.
     // This is achieved by storing the two results in two different workspaces: X and X_conj respectively.
-    PanelT<Coord::Col, T> x(dist, At_start);
-    PanelT<Coord::Row, T> xt(dist, At_start);
-    // TODO should I set them to zero? I'm thinking about xt in particular
 
-    // TODO maybe it may be enough to set_to_zero (At_size.isEmpty())
+    // They have to be set to zero, because all tiles are going to be reduced, and some tiles may not get
+    // "initialized" during computation, so they should not contribute with any spurious value to the final result
+    x.set_offset(At_start, true);
+    xt.set_offset(At_start, true);
 
     // HEMM X = At . W
     compute_x(rank_v0.col(), x, xt, at_offset, mat_a, w, wt, serial_comm);
@@ -789,19 +795,19 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
       update_x(x, w2, v);
     }
 
-    // The finalized X result has to be known by everyone, since it will be used by all ranks
-    // for updating the trailing matrix.
-    //
-    // In particular, each cell of the lower part of At, in order to be updated, requires both
-    // the X and its conjugated version.
-    // This means that even in this case, as we did before for other workspaces, each row must know
-    // the X tile of the row they belong to, in addition to the X tile of the equivalent transposed column
+    matrix::broadcast(executor_mpi, rank_v0.col(), x, xt, serial_comm);
 
-    matrix::broadcast(rank_v0.col(), x, xt, serial_comm);
-
-    // 3E UPDATE
-    // HER2K At = At - X . V* + V . X*
+    // UPDATE
+    // At = At - X . V* + V . X*
     update_a(At_start, mat_a, x, vt, v, xt);
+
+    w.reset();
+    wt.reset();
+
+    v.reset();
+    vt.reset();
+    x.reset();
+    xt.reset();
   }
 
   return taus;
