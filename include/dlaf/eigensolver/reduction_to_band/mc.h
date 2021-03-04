@@ -387,8 +387,7 @@ void compute_w(PanelT<Coord::Col, T>& w, MatrixLikeT& v, ConstMatrixT<T>& t) {
 template <class T>
 void compute_x(comm::IndexT_MPI reducer_col, PanelT<Coord::Col, T>& x, PanelT<Coord::Row, T>& xt,
                const LocalTileSize at_offset, ConstMatrixT<T>& a, ConstPanelT<Coord::Col, T>& w,
-               ConstPanelT<Coord::Row, T>& wt,
-               common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
+               ConstPanelT<Coord::Row, T>& wt, common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
   using hpx::util::unwrapping;
   using dlaf::common::make_data;
   using dlaf::comm::sync::reduce;
@@ -399,88 +398,112 @@ void compute_x(comm::IndexT_MPI reducer_col, PanelT<Coord::Col, T>& x, PanelT<Co
   for (SizeType i = at_offset.rows(); i < dist.localNrTiles().rows(); ++i) {
     const auto limit = dist.template nextLocalTileFromGlobalTile<Coord::Col>(
         dist.template globalTileFromLocalTile<Coord::Row>(i) + 1);
-    for (SizeType j = at_offset.cols(); j < limit; ++j) {
-      const LocalTileIndex index_at_wrt_a{i, j};
+    for (SizeType j = limit - 1; j >= at_offset.cols(); --j) {
+      const LocalTileIndex index_a_loc{i, j};
 
-      // TODO possible FIXME? I would add at_start
-      const GlobalTileIndex index_a = dist.globalTileIndex(index_at_wrt_a);
+      const GlobalTileIndex index_a = dist.globalTileIndex(index_a_loc);
 
+      const bool is_first = j == limit - 1;
       const bool is_diagonal_tile = (index_a.row() == index_a.col());
 
       if (is_diagonal_tile) {
-        const LocalTileIndex index_x{index_at_wrt_a.row(), 0};
-        const LocalTileIndex index_w{index_at_wrt_a.row(), 0};
+        const LocalTileIndex index_x{index_a_loc.row(), 0};
+        const LocalTileIndex index_w{index_a_loc.row(), 0};
 
         // clang-format off
         FutureTile<T>       tile_x = x(index_x);
-        FutureConstTile<T>  tile_a = a.read(index_at_wrt_a);
+        FutureConstTile<T>  tile_a = a.read(index_a_loc);
         FutureConstTile<T>  tile_w = w.read(index_w);
         // clang-format on
 
         hpx::dataflow(unwrapping(dlaf::tile::hemm<T, Device::CPU>), blas::Side::Left, blas::Uplo::Lower,
-                      static_cast<T>(1), std::move(tile_a), std::move(tile_w), static_cast<T>(1),
-                      std::move(tile_x));
+                      static_cast<T>(1), std::move(tile_a), std::move(tile_w),
+                      static_cast<T>(is_first ? 0 : 1), std::move(tile_x));
       }
       else {
         // A  . W
         {
-          const LocalTileIndex index_x{index_at_wrt_a.row(), 0};
-          const LocalTileIndex index_wt{0, index_at_wrt_a.col()};
+          // Note:
+          // Since it is not a diagonal tile, otherwise it would have been managed in the previous
+          // branch, the second operand is not available in W but it is accessible through the
+          // support panel Wt.
+          // However, since we are still computing the "straight" part, the result can be stored
+          // in the "local" panel X.
+          const LocalTileIndex index_x{index_a_loc.row(), 0};
+          const LocalTileIndex index_wt{0, index_a_loc.col()};
 
           // clang-format off
           FutureTile<T>       tile_x = x(index_x);
-          FutureConstTile<T>  tile_a = a.read(index_at_wrt_a);
+          FutureConstTile<T>  tile_a = a.read(index_a_loc);
           FutureConstTile<T>  tile_w = wt.read(index_wt);
           // clang-format on
 
           hpx::dataflow(unwrapping(dlaf::tile::gemm<T, Device::CPU>), blas::Op::NoTrans,
                         blas::Op::NoTrans, static_cast<T>(1), std::move(tile_a), std::move(tile_w),
-                        static_cast<T>(1), std::move(tile_x));
+                        static_cast<T>(is_first ? 0 : 1), std::move(tile_x));
         }
 
         // A* . W
         {
+          // Note:
+          // Here we are considering the hermitian part of A, so coordinates have to be "mirrored".
+          // So, first step is identifying the mirrored cell coordinate, i.e. swap row/col, together
+          // with realizing if the new coord lays on an owned row or not.
+          // If yes, the result can be stored in the X, otherwise Xt support panel will be used.
+          // For what concerns the second operand, it can be found for sure in W. In fact, the
+          // multiplication requires matching col(A) == row(W), but since coordinates are mirrored,
+          // we are mathing row(A) == row(W), so it is local by construction.
           const auto owner = dist.template rankGlobalTile<Coord::Row>(index_a.col());
 
           const LocalTileIndex index_x{dist.template localTileFromGlobalTile<Coord::Row>(index_a.col()),
                                        0};
-          const LocalTileIndex index_xt{0, index_at_wrt_a.col()};
+          const LocalTileIndex index_xt{0, index_a_loc.col()};
 
-          const LocalTileIndex index_w{index_at_wrt_a.row(), 0};
+          const LocalTileIndex index_w{index_a_loc.row(), 0};
+
+          const bool is_first_xt = (dist.rankIndex().row() != owner) && is_first;
 
           // clang-format off
           FutureTile<T>       tile_x = (dist.rankIndex().row() == owner) ? x(index_x) : xt(index_xt);
-          FutureConstTile<T>  tile_a = a.read(index_at_wrt_a);
+          FutureConstTile<T>  tile_a = a.read(index_a_loc);
           FutureConstTile<T>  tile_w = w.read(index_w);
           // clang-format on
 
           hpx::dataflow(unwrapping(dlaf::tile::gemm<T, Device::CPU>), blas::Op::ConjTrans,
                         blas::Op::NoTrans, static_cast<T>(1), std::move(tile_a), std::move(tile_w),
-                        static_cast<T>(1), std::move(tile_x));
+                        static_cast<T>(is_first_xt ? 0 : 1), std::move(tile_x));
         }
       }
     }
   }
-  // X has to be reduce by row-wise and col-wise, and the final result will be available just on the Ai panel column
 
-  // TODO possible FIXME cannot use iterate_range2d over x_tmp distribution because otherwise it would
-  // enter for non used columns and it will fail
+  // Note:
+  // At this point, partial results of X and Xt are available in the panels, and they have to be reduced,
+  // both row-wise and col-wise.
+  // The final X result will be available just on Ai panel column.
 
-  // So, reduce col-wise ...
+  // Note:
+  // The first step in reducing partial results distributed over X and Xt, it is to reduce the row
+  // panel Xt col-wise, by collecting all Xt results on the rank which can "mirror" the result on its
+  // rows (i.e. diagonal). So, for each tile of the row panel, select who is the "diagonal" rank that can
+  // mirror and reduce on it.
   for (const auto& index_xt : xt) {
-    const auto index_x_row = dist.template globalTileFromLocalTile<Coord::Col>(index_xt.col());
-    const auto rank_owner_row = dist.template rankGlobalTile<Coord::Row>(index_x_row);
+    const auto index_k = dist.template globalTileFromLocalTile<Coord::Col>(index_xt.col());
+    const auto rank_owner_row = dist.template rankGlobalTile<Coord::Row>(index_k);
 
     if (rank_owner_row == rank.row()) {
+      // Note:
+      // Since it is the owner, it has to perform the "mirroring" of the results from columns to
+      // rows.
       auto reduce_x_func = unwrapping([=](auto&& tile_x, auto&& comm_wrapper) {
         auto comm_grid = comm_wrapper.ref();
 
+        // TODO here the IN-PLACE is happening (because Xt is not used for this tile on this rank)
         reduce(rank_owner_row, comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x),
                make_data(tile_x));
       });
 
-      // TODO I should add back to x from xt (or I should compute_x in the right position)
-      const auto i = dist.template localTileFromGlobalTile<Coord::Row>(index_x_row);
+      const auto i = dist.template localTileFromGlobalTile<Coord::Row>(index_k);
       FutureTile<T> tile_x = x({i, 0});
 
       hpx::dataflow(reduce_x_func, std::move(tile_x), serial_comm());
@@ -500,8 +523,12 @@ void compute_x(comm::IndexT_MPI reducer_col, PanelT<Coord::Col, T>& x, PanelT<Co
     }
   }
 
-  /// ... and reduce X row-wise
+  // Note:
+  // At this point partial results are all collected in X (Xt has been embedded in previous step),
+  // so the last step needed is to reduce these last partial results in the final results.
+  // The result is needed just on the column with reflectors.
   auto reduce_x_func = unwrapping([reducer_col](auto&& tile_x, auto&& comm_wrapper) {
+    // TODO Again, here the IN-PLACE is happening
     reduce(reducer_col, comm_wrapper.ref().rowCommunicator(), MPI_SUM, make_data(tile_x),
            make_data(tile_x));
   });
@@ -676,7 +703,7 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
   PanelT<Coord::Row, T> xt(dist);
 
   for (SizeType j_panel = 0; j_panel < (dist.nrTiles().cols() - 1); ++j_panel) {
-    MatrixT<T> t(dist_block);   // used just by the column
+    MatrixT<T> t(dist_block);  // used just by the column
 
     const GlobalTileIndex Ai_start_global{j_panel + 1, j_panel};
     const GlobalTileIndex At_start_global{Ai_start_global + GlobalTileSize{0, 1}};
@@ -779,6 +806,8 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
     wt.set_offset(At_start);
     matrix::broadcast(executor_mpi, rank_v0.col(), w, wt, serial_comm);
 
+    // COMPUTE X
+    // X = At . W
     // Since At is hermitian, just the lower part is referenced.
     // When the tile is not part of the main diagonal, the same tile has to be used for two computations
     // that will contribute to two different rows of X: the ones indexed with row and col.
@@ -789,21 +818,23 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
     x.set_offset(At_start, true);
     xt.set_offset(At_start, true);
 
-    // HEMM X = At . W
     compute_x(rank_v0.col(), x, xt, at_offset, mat_a, w, wt, serial_comm);
 
     // Now the intermediate result for X is available on the panel column rank,
     // which has locally all the needed stuff for updating X and finalize the result
+
+    // W2 can be computed by the panel column rank only, it is the only one that has the X
     if (is_panel_rank_col) {
-      // 3C COMPUTE W2
-      // W2 can be computed by the panel column rank only, it is the only one that has the X
       MatrixT<T> w2 = std::move(t);
-      set_to_zero(w2);  // superflous? I don't think so, because if any tile does not participate, it has
-                        // to not contribute with any value
+
+      // Note:
+      // Not all ranks in the column always hold at least a tile in the panel Ai, but all ranks in
+      // the column are going to participate to the reduce. For them, it is important to set the
+      // partial result W2 to zero.
+      set_to_zero(w2);
 
       compute_w2(w2, w, x, serial_comm);
 
-      // 3D UPDATE X
       update_x(x, w2, v);
     }
 
