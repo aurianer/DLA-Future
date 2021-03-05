@@ -88,12 +88,10 @@ void testBacktransformationEigenv(SizeType m, SizeType n, SizeType mb, SizeType 
   dlaf::matrix::util::set_random(mat_v);
 
   int tottaus;
-  if (m < mb || m == 0 || n == 0) {
+  if (m < mb || m == 0 || n == 0)
     tottaus = 0;
-  }
-  else {
+  else
     tottaus = (m / mb - 1) * mb + m % mb;
-  }
 
   if (tottaus > 0) {
     // Copy matrices locally
@@ -164,7 +162,6 @@ void testBacktransformationEigenv(SizeType m, SizeType n, SizeType mb, SizeType 
     CHECK_MATRIX_NEAR(result, mat_c, error, error);
   }
 }
-
 
 template <class T>
 void testBacktransformationEigenv(comm::CommunicatorGrid grid, SizeType m, SizeType n, SizeType mb, SizeType nb) {
