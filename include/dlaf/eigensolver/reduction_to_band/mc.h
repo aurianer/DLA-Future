@@ -499,8 +499,7 @@ void compute_x(comm::IndexT_MPI reducer_col, PanelT<Coord::Col, T>& x, PanelT<Co
         auto comm_grid = comm_wrapper.ref();
 
         // TODO here the IN-PLACE is happening (because Xt is not used for this tile on this rank)
-        reduce(rank_owner_row, comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x),
-               make_data(tile_x));
+        reduce(comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x));
       });
 
       const auto i = dist.template localTileFromGlobalTile<Coord::Row>(index_k);
@@ -512,9 +511,7 @@ void compute_x(comm::IndexT_MPI reducer_col, PanelT<Coord::Col, T>& x, PanelT<Co
       auto reduce_x_func = unwrapping([=](auto&& tile_x_conj, auto&& comm_wrapper) {
         auto comm_grid = comm_wrapper.ref();
 
-        T fake;
-        reduce(rank_owner_row, comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x_conj),
-               make_data(&fake, 0));
+        reduce(rank_owner_row, comm_grid.colCommunicator(), MPI_SUM, make_data(tile_x_conj));
       });
 
       FutureConstTile<T> tile_x = xt.read(index_xt);
@@ -529,8 +526,11 @@ void compute_x(comm::IndexT_MPI reducer_col, PanelT<Coord::Col, T>& x, PanelT<Co
   // The result is needed just on the column with reflectors.
   auto reduce_x_func = unwrapping([reducer_col](auto&& tile_x, auto&& comm_wrapper) {
     // TODO Again, here the IN-PLACE is happening
-    reduce(reducer_col, comm_wrapper.ref().rowCommunicator(), MPI_SUM, make_data(tile_x),
-           make_data(tile_x));
+    auto comm = comm_wrapper.ref().rowCommunicator();
+    if (comm.rank() == reducer_col)
+      reduce(comm, MPI_SUM, make_data(tile_x));
+    else
+      reduce(reducer_col, comm, MPI_SUM, make_data(tile_x));
   });
 
   // TODO readonly tile management
