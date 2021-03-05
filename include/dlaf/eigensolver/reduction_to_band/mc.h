@@ -748,6 +748,8 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
         update_trailing_panel(mat_a, Ai_start, Ai_size, Ai_start_global, index_el_x0, tau, serial_comm);
       }
 
+      // Prepare T and V for the next step
+
       computeTFactor<Backend::MC>(k_reflectors, mat_a, Ai_start_global, taus_panel, t, serial_comm);
 
       // TODO insert back
@@ -763,7 +765,13 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
                               return block;
                             })));
 
-      // setup V0
+      // Note:
+      // Reflectors are stored in the lower triangular part of the A matrix leading to sharing memory
+      // between reflectors and results, which are in the upper triangular part. The problem exists only
+      // for the first tile (of the V, i.e. band excluded). Since refelectors will be used in next
+      // computations, they should be well-formed, i.e. a unit lower trapezoidal matrix. For this reason,
+      // a support tile is used, where just the reflectors values are copied, the diagonal is set to 1
+      // and the rest is zeroed out.
       if (rank_v0 == rank) {
         auto setup_V0_func = unwrapping([](auto&& tile_v, const auto& tile_a) {
           dlaf::tile::lacpy(tile_a, tile_v);
@@ -781,7 +789,8 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
         hpx::dataflow(setup_V0_func, v(LocalTileIndex{ai_offset.rows(), 0}), mat_a.read(Ai_start));
       }
 
-      // setup workspace mask
+      // The rest of the V panel of reflectors can just point to the values in A, since they are
+      // well formed in-place.
       for (const auto& index : v) {
         if (index.row() == ai_offset.rows() && rank_v0 == rank)
           continue;  // TODO this can be a bug of panel_workspace (loop future)
