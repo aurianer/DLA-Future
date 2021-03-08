@@ -790,17 +790,15 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
           // clang-format on
         });
 
-        hpx::dataflow(setup_V0_func, v(LocalTileIndex{ai_offset.rows(), 0}), mat_a.read(Ai_start));
+        hpx::dataflow(setup_V0_func, v(Ai_start), mat_a.read(Ai_start));
       }
 
       // The rest of the V panel of reflectors can just point to the values in A, since they are
       // well formed in-place.
-      for (const auto& index : v) {
-        if (index.row() == ai_offset.rows() && rank_v0 == rank)
-          continue;  // TODO this can be a bug of panel_workspace (loop future)
-
-        // TODO it may be interesting working with "coords projections"
-        v.set_tile(index, mat_a.read(index + LocalTileSize{0, ai_offset.cols()}));
+      for (auto row = dist.template nextLocalTileFromGlobalTile<Coord::Row>(Ai_start_global.row() + 1);
+           row < dist.localNrTiles().rows(); ++row) {
+        const LocalTileIndex idx{row, ai_offset.cols()};
+        v.set_tile(idx, mat_a.read(idx));
       }
     }
 
