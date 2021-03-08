@@ -756,18 +756,12 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
         update_trailing_panel(mat_a, Ai_start, Ai_size, Ai_start_global, index_el_x0, tau, serial_comm);
       }
 
+      taus.emplace_back(hpx::when_all(taus_panel)
+                            .then(unwrapping(hpx::util::unwrap<std::vector<hpx::shared_future<T>>>)));
+
       // Prepare T and V for the next step
 
       computeTFactor<Backend::MC>(k_reflectors, mat_a, Ai_start_global, taus_panel, t, serial_comm);
-
-      taus.emplace_back(hpx::when_all(taus_panel.begin(), taus_panel.end())
-                            .then(unwrapping([](std::vector<hpx::shared_future<T>>&& taus_block) {
-                              std::vector<T> block;
-                              block.reserve(taus_block.size());
-                              for (const hpx::shared_future<T>& tau_future : taus_block)
-                                block.emplace_back(tau_future.get());
-                              return block;
-                            })));
 
       // Note:
       // Reflectors are stored in the lower triangular part of the A matrix leading to sharing memory
