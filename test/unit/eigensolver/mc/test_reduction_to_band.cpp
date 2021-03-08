@@ -8,18 +8,19 @@
 // SPDX-License-Identifier: BSD-3-Clause
 //
 
-#include "dlaf/common/index2d.h"
 #include "dlaf/eigensolver/reduction_to_band.h"
+
+#include <cmath>
 
 #include <gtest/gtest.h>
 
-#include "dlaf/lapack_tile.h"  // Just for lapack.hh workaround
-
+#include "dlaf/common/index2d.h"
 #include "dlaf/common/pipeline.h"
 #include "dlaf/communication/communicator.h"
 #include "dlaf/communication/communicator_grid.h"
 #include "dlaf/communication/functions_sync.h"
 #include "dlaf/communication/sync/broadcast.h"
+#include "dlaf/lapack_tile.h"  // Just for lapack.hh workaround
 #include "dlaf/matrix/copy.h"
 #include "dlaf/matrix/matrix.h"
 #include "dlaf/memory/memory_view.h"
@@ -51,7 +52,7 @@ public:
 
 TYPED_TEST_SUITE(ReductionToBandTest, dlaf::test::MatrixElementTypes);
 
-const std::vector<LocalElementSize> square_sizes{{3, 3}, {12, 12}, {24, 24}};
+const std::vector<LocalElementSize> square_sizes{{3, 3}, {13, 13}, {12, 12}, {24, 24}};
 const std::vector<TileElementSize> square_block_sizes{{3, 3}};
 
 template <class T>
@@ -84,7 +85,7 @@ void all_gather(Matrix<const T, device>& source, MatrixLocal<T>& dest,
 
 template <class T>
 void mirror_on_diag(const Tile<T, Device::CPU>& tile) {
-  DLAF_ASSERT(square_size(tile), "");
+  DLAF_ASSERT(square_size(tile), tile.size());
 
   for (SizeType j = 0; j < tile.size().cols(); j++)
     for (SizeType i = j; i < tile.size().rows(); ++i)
@@ -93,8 +94,7 @@ void mirror_on_diag(const Tile<T, Device::CPU>& tile) {
 
 template <class T>
 void copy_transposed(const Tile<const T, Device::CPU>& from, const Tile<T, Device::CPU>& to) {
-  DLAF_ASSERT(square_size(from), "");
-  DLAF_ASSERT(equal_size(from, to), from.size(), to.size());
+  DLAF_ASSERT(from.size() == transposed(to.size()), from.size(), to.size());
 
   for (SizeType j = 0; j < from.size().cols(); j++)
     for (SizeType i = 0; i < from.size().rows(); ++i)
@@ -123,14 +123,16 @@ void setup_sym_band(MatrixLocal<T>& matrix, const SizeType& band_size) {
 
     const auto& tile_lo = matrix.tile(ij);
 
-    // setup the strictly lower to zero
-    // clang-format off
-    lapack::laset(
-        lapack::MatrixType::Lower,
-        tile_lo.size().rows() - 1, tile_lo.size().cols() - 1,
-        0, 0,
-        tile_lo.ptr({1, 0}), tile_lo.ld());
-    // clang-format on
+    // setup the strictly lower to zero (if there is any)
+    if (std::min(tile_lo.size().rows(), tile_lo.size().cols()) - 1 > 0) {
+      // clang-format off
+      lapack::laset(
+          lapack::MatrixType::Lower,
+          tile_lo.size().rows() - 1, tile_lo.size().cols() - 1,
+          0, 0,
+          tile_lo.ptr({1, 0}), tile_lo.ld());
+      // clang-format on
+    }
 
     copy_transposed(matrix.tile_read(ij), matrix.tile(common::transposed(ij)));
   }
@@ -169,13 +171,14 @@ auto all_gather_taus(const SizeType k, const SizeType chunk_size, const SizeType
   auto local_taus = hpx::util::unwrap(fut_local_taus);
 
   DLAF_ASSERT(band_size == chunk_size, band_size, chunk_size);
-  DLAF_ASSERT(k % chunk_size == 0, k, band_size);
 
-  const auto n_chunks = k / chunk_size;
+  const auto n_chunks = std::ceil(float(k) / chunk_size);
 
   for (auto index_chunk = 0; index_chunk < n_chunks; ++index_chunk) {
     const auto owner = index_chunk % comm_grid.size().cols();
     const bool is_owner = owner == comm_grid.rank().col();
+
+    const auto this_chunk_size = std::min(k - index_chunk * chunk_size, chunk_size);
 
     std::vector<T> chunk_data;
     if (is_owner) {
@@ -185,7 +188,7 @@ auto all_gather_taus(const SizeType k, const SizeType chunk_size, const SizeType
                       common::make_data(chunk_data.data(), static_cast<SizeType>(chunk_data.size())));
     }
     else {
-      chunk_data.resize(to_sizet(chunk_size));
+      chunk_data.resize(to_sizet(this_chunk_size));
       broadcast::receive_from(owner, comm_grid.rowCommunicator(),
                               common::make_data(chunk_data.data(),
                                                 static_cast<SizeType>(chunk_data.size())));
@@ -206,7 +209,7 @@ TYPED_TEST(ReductionToBandTest, Correctness) {
       for (const auto& block_size : square_block_sizes) {
         const SizeType band_size = block_size.rows();
         const SizeType band_size_tiles = band_size / block_size.rows();
-        const SizeType k_reflectors = size.rows() - band_size;  // -1 the last one is superflous
+        const SizeType k_reflectors = size.rows() - band_size;
 
         Distribution distribution({size.rows(), size.cols()}, block_size, comm_grid.size(),
                                   comm_grid.rank(), {0, 0});
