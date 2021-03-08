@@ -680,6 +680,10 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
 
   using factorization::internal::computeTFactor;
 
+  DLAF_ASSERT(equal_process_grid(mat_a, grid), mat_a, grid);
+  DLAF_ASSERT(square_size(mat_a), mat_a.size());
+  DLAF_ASSERT(square_blocksize(mat_a), mat_a.blockSize());
+
   parallel_executor executor_hp(&get_thread_pool("default"), thread_priority::high);
   parallel_executor executor_normal(&get_thread_pool("default"), thread_priority::default_);
 
@@ -691,7 +695,8 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
   const comm::Index2D rank = dist.rankIndex();
 
   const SizeType nb = mat_a.blockSize().rows();
-  // const SizeType band_size = nb;  // TODO not yet implemented for the moment the panel is tile-wide
+  // TODO not yet implemented for the moment the panel is tile-wide
+  // const SizeType band_size = nb;
 
   const Distribution dist_block(LocalElementSize{nb, nb}, dist.blockSize());
 
