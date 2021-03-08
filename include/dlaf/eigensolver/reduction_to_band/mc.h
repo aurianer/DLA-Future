@@ -278,17 +278,19 @@ void update_trailing_panel(MatrixT<T>& a, const LocalTileIndex ai_start_loc,
           pt_size = pt_size - offset;
         }
 
-        // W += 1 . A* . V
-        // clang-format off
-        blas::gemv(blas::Layout::ColMajor,
-            blas::Op::ConjTrans,
-            pt_size.rows(), pt_size.cols(),
-            static_cast<T>(1),
-            tile_a.ptr(pt_start), tile_a.ld(),
-            tile_a.ptr(v_start), 1,
-            1,
-            tile_w.ptr(w_start), tile_w.ld());
-        // clang-format on
+        if (pt_start.isIn(tile_a.size())) {
+          // W += 1 . A* . V
+          // clang-format off
+          blas::gemv(blas::Layout::ColMajor,
+              blas::Op::ConjTrans,
+              pt_size.rows(), pt_size.cols(),
+              static_cast<T>(1),
+              tile_a.ptr(pt_start), tile_a.ld(),
+              tile_a.ptr(v_start), 1,
+              1,
+              tile_w.ptr(w_start), tile_w.ld());
+          // clang-format on
+        }
       });
 
       hpx::dataflow(compute_w_func, w(LocalTileIndex{0, 0}), a.read(index_a_loc));
@@ -338,15 +340,17 @@ void update_trailing_panel(MatrixT<T>& a, const LocalTileIndex ai_start_loc,
           pt_size = pt_size - offset;
         }
 
-        // Pt = Pt - tau * v * w*
-        // clang-format off
-        blas::ger(blas::Layout::ColMajor,
-            pt_size.rows(), pt_size.cols(),
-            -dlaf::conj(tau),
-            tile_a.ptr(v_start), 1,
-            tile_w.ptr(w_start), tile_w.ld(),
-            tile_a.ptr(pt_start), tile_a.ld());
-        // clang-format on
+        if (pt_start.isIn(tile_a.size())) {
+          // Pt = Pt - tau * v * w*
+          // clang-format off
+          blas::ger(blas::Layout::ColMajor,
+              pt_size.rows(), pt_size.cols(),
+              -dlaf::conj(tau),
+              tile_a.ptr(v_start), 1,
+              tile_w.ptr(w_start), tile_w.ld(),
+              tile_a.ptr(pt_start), tile_a.ld());
+          // clang-format on
+        }
       });
 
       hpx::dataflow(apply_reflector_func, a(index_a_loc), tau, w(LocalTileIndex{0, 0}));
@@ -729,16 +733,15 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
 
     // 1. PANEL
     if (is_panel_rank_col) {
-      const SizeType Ai_start_row_el_global =
-          dist.template globalElementFromGlobalTileAndTileElement<Coord::Row>(Ai_start_global.row(), 0);
-      const SizeType Ai_el_size_rows_global = mat_a.size().rows() - Ai_start_row_el_global;
+      const SizeType k_reflectors = [v0_size = mat_a.tileSize(Ai_start_global)]() {
+        return std::min(v0_size.cols(), v0_size.rows());
+      }();
 
       common::internal::vector<hpx::shared_future<T>> taus_panel;
 
+      // Note:
       // for each column in the panel, compute reflector and update panel
       // if this block has the last reflector, that would be just the first 1, skip the last column
-      const bool has_last_reflector = Ai_el_size_rows_global == nb;
-      const SizeType k_reflectors = nb + (has_last_reflector ? -1 : 0);
       for (SizeType j_reflector = 0; j_reflector < k_reflectors; ++j_reflector) {
         const TileElementIndex index_el_x0{j_reflector, j_reflector};
 
@@ -751,10 +754,6 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
       // Prepare T and V for the next step
 
       computeTFactor<Backend::MC>(k_reflectors, mat_a, Ai_start_global, taus_panel, t, serial_comm);
-
-      // TODO insert back
-      if (has_last_reflector)
-        taus_panel.push_back(hpx::make_ready_future<T>(0));
 
       taus.emplace_back(hpx::when_all(taus_panel.begin(), taus_panel.end())
                             .then(unwrapping([](std::vector<hpx::shared_future<T>>&& taus_block) {
