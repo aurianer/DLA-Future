@@ -27,6 +27,7 @@
 #include "dlaf/communication/functions_sync.h"
 #include "dlaf/lapack_tile.h"
 #include "dlaf/matrix/distribution.h"
+#include "dlaf/matrix/index.h"
 #include "dlaf/matrix/matrix.h"
 #include "dlaf/matrix/panel.h"
 #include "dlaf/util_matrix.h"
@@ -77,10 +78,10 @@ void set_to_zero(MatrixT<Type>& matrix) {
 }
 
 template <class T>
-hpx::shared_future<T> compute_reflector(MatrixT<T>& a, const LocalTileIndex ai_start_loc,
-                                        const LocalTileSize ai_localsize, const GlobalTileIndex ai_start,
-                                        const TileElementIndex index_el_x0,
-                                        common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
+hpx::shared_future<T> compute_reflector(
+    MatrixT<T>& a, const common::IterableRange2D<SizeType, dlaf::matrix::LocalTile_TAG> ai_panel,
+    const GlobalTileIndex ai_start, const TileElementIndex index_el_x0,
+    common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
   using hpx::util::unwrapping;
   using common::make_data;
 
@@ -101,7 +102,7 @@ hpx::shared_future<T> compute_reflector(MatrixT<T>& a, const LocalTileIndex ai_s
   // Extract x0 and compute local cumulative sum of squares of the reflector column
   auto x0_and_squares = hpx::make_ready_future<x0_and_squares_t>(static_cast<T>(0), static_cast<T>(0));
 
-  for (const LocalTileIndex& index_x_loc : iterate_range2d(ai_start_loc, ai_localsize)) {
+  for (const LocalTileIndex& index_x_loc : ai_panel) {
     const SizeType index_x_row = dist.template globalTileFromLocalTile<Coord::Row>(index_x_loc.row());
 
     const bool has_first_component = (index_x_row == ai_start.row());
@@ -195,7 +196,7 @@ hpx::shared_future<T> compute_reflector(MatrixT<T>& a, const LocalTileIndex ai_s
   }
 
   // 1A/3 COMPUTE REFLECTOR COMPONENTs
-  for (const LocalTileIndex& index_v_loc : iterate_range2d(ai_start_loc, ai_localsize)) {
+  for (const LocalTileIndex& index_v_loc : ai_panel) {
     const SizeType index_v_row = dist.template globalTileFromLocalTile<Coord::Row>(index_v_loc.row());
 
     const bool has_first_component = (index_v_row == ai_start.row());
@@ -221,9 +222,10 @@ hpx::shared_future<T> compute_reflector(MatrixT<T>& a, const LocalTileIndex ai_s
 }
 
 template <class T>
-void update_trailing_panel(MatrixT<T>& a, const LocalTileIndex ai_start_loc,
-                           const LocalTileSize ai_localsize, const GlobalTileIndex ai_start,
-                           const TileElementIndex index_el_x0, hpx::shared_future<T> tau,
+void update_trailing_panel(MatrixT<T>& a,
+                           const common::IterableRange2D<SizeType, dlaf::matrix::LocalTile_TAG> ai_panel,
+                           const GlobalTileIndex ai_start, const TileElementIndex index_el_x0,
+                           hpx::shared_future<T> tau,
                            common::Pipeline<comm::CommunicatorGrid>& serial_comm) {
   using hpx::util::unwrapping;
   using common::make_data;
@@ -241,7 +243,7 @@ void update_trailing_panel(MatrixT<T>& a, const LocalTileIndex ai_start_loc,
     MatrixT<T> w({1, nb}, dist.blockSize());
     set_to_zero(w);
 
-    for (const LocalTileIndex& index_a_loc : iterate_range2d(ai_start_loc, ai_localsize)) {
+    for (const LocalTileIndex& index_a_loc : ai_panel) {
       const SizeType index_a_row = dist.template globalTileFromLocalTile<Coord::Row>(index_a_loc.row());
 
       const bool has_first_component = (index_a_row == ai_start.row());
@@ -304,7 +306,7 @@ void update_trailing_panel(MatrixT<T>& a, const LocalTileIndex ai_start_loc,
     hpx::dataflow(reduce_w_func, w(LocalTileIndex{0, 0}), serial_comm());
 
     // 1B/2 UPDATE TRAILING PANEL
-    for (const LocalTileIndex& index_a_loc : iterate_range2d(ai_start_loc, ai_localsize)) {
+    for (const LocalTileIndex& index_a_loc : ai_panel) {
       const SizeType index_a_row = dist.template globalTileFromLocalTile<Coord::Row>(index_a_loc.row());
 
       const bool has_first_component = (index_a_row == ai_start.row());
@@ -592,17 +594,17 @@ void update_x(PanelT<Coord::Col, T>& x, ConstMatrixT<T>& w2, MatrixLikeT& v) {
 }
 
 template <class T>
-void update_a(const LocalTileIndex& at_start, MatrixT<T>& a, ConstPanelT<Coord::Col, T>& x,
+void update_a(const LocalTileSize& at_start, MatrixT<T>& a, ConstPanelT<Coord::Col, T>& x,
               ConstPanelT<Coord::Row, T>& vt, ConstPanelT<Coord::Col, T>& v,
               ConstPanelT<Coord::Row, T>& xt) {
   using hpx::util::unwrapping;
 
   const auto dist = a.distribution();
 
-  for (SizeType i = at_start.row(); i < dist.localNrTiles().rows(); ++i) {
+  for (SizeType i = at_start.rows(); i < dist.localNrTiles().rows(); ++i) {
     const auto limit = dist.template nextLocalTileFromGlobalTile<Coord::Col>(
         dist.template globalTileFromLocalTile<Coord::Row>(i) + 1);
-    for (SizeType j = at_start.col(); j < limit; ++j) {
+    for (SizeType j = at_start.cols(); j < limit; ++j) {
       const LocalTileIndex index_at{i, j};
 
       const GlobalTileIndex index_a = dist.globalTileIndex(index_at);  // TODO possible FIXME
@@ -714,31 +716,31 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
   for (SizeType j_panel = 0; j_panel < (dist.nrTiles().cols() - 1); ++j_panel) {
     MatrixT<T> t(dist_block);  // used just by the column
 
-    const GlobalTileIndex Ai_start_global{j_panel + 1, j_panel};
-    const GlobalTileIndex At_start_global{Ai_start_global + GlobalTileSize{0, 1}};
+    const GlobalTileIndex ai_start{GlobalTileIndex{j_panel, j_panel} + GlobalTileSize{1, 0}};
+    const GlobalTileIndex at_start{ai_start + GlobalTileSize{0, 1}};
 
-    const comm::Index2D rank_v0 = dist.rankGlobalTile(Ai_start_global);
+    const comm::Index2D rank_v0 = dist.rankGlobalTile(ai_start);
 
     const LocalTileSize ai_offset{
-        dist.template nextLocalTileFromGlobalTile<Coord::Row>(Ai_start_global.row()),
-        dist.template nextLocalTileFromGlobalTile<Coord::Col>(Ai_start_global.col()),
+        dist.template nextLocalTileFromGlobalTile<Coord::Row>(ai_start.row()),
+        dist.template nextLocalTileFromGlobalTile<Coord::Col>(ai_start.col()),
     };
-    const LocalTileIndex Ai_start{ai_offset.rows(), ai_offset.cols()};  // TODO trying to deprecate this
-    const LocalTileSize Ai_size{dist.localNrTiles().rows() - Ai_start.row(), 1};
-
     const LocalTileSize at_offset{
         ai_offset.rows(),
-        dist.template nextLocalTileFromGlobalTile<Coord::Col>(At_start_global.col()),
+        dist.template nextLocalTileFromGlobalTile<Coord::Col>(at_start.col()),
     };
-    const LocalTileIndex At_start{at_offset.rows(), at_offset.cols()};
+
+    const auto ai_panel =
+        iterate_range2d(LocalTileIndex{0, 0} + ai_offset,
+                        LocalTileSize{dist.localNrTiles().rows() - ai_offset.rows(), 1});
 
     const bool is_panel_rank_col = rank_v0.col() == rank.col();
 
-    v.set_offset(At_start);
+    v.set_offset(at_offset);
 
     // 1. PANEL
     if (is_panel_rank_col) {
-      const SizeType k_reflectors = [v0_size = mat_a.tileSize(Ai_start_global)]() {
+      const SizeType k_reflectors = [v0_size = mat_a.tileSize(ai_start)]() {
         return std::min(v0_size.cols(), v0_size.rows());
       }();
 
@@ -750,10 +752,9 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
       for (SizeType j_reflector = 0; j_reflector < k_reflectors; ++j_reflector) {
         const TileElementIndex index_el_x0{j_reflector, j_reflector};
 
-        auto tau =
-            compute_reflector(mat_a, Ai_start, Ai_size, Ai_start_global, index_el_x0, serial_comm);
+        auto tau = compute_reflector(mat_a, ai_panel, ai_start, index_el_x0, serial_comm);
         taus_panel.push_back(tau);
-        update_trailing_panel(mat_a, Ai_start, Ai_size, Ai_start_global, index_el_x0, tau, serial_comm);
+        update_trailing_panel(mat_a, ai_panel, ai_start, index_el_x0, tau, serial_comm);
       }
 
       taus.emplace_back(hpx::when_all(taus_panel)
@@ -761,7 +762,7 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
 
       // Prepare T and V for the next step
 
-      computeTFactor<Backend::MC>(k_reflectors, mat_a, Ai_start_global, taus_panel, t, serial_comm);
+      computeTFactor<Backend::MC>(k_reflectors, mat_a, ai_start, taus_panel, t, serial_comm);
 
       // Note:
       // Reflectors are stored in the lower triangular part of the A matrix leading to sharing memory
@@ -784,31 +785,32 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
           // clang-format on
         });
 
-        hpx::dataflow(setup_V0_func, v(Ai_start), mat_a.read(Ai_start));
+        const LocalTileIndex v0_index(ai_offset.rows(), ai_offset.cols());
+        hpx::dataflow(setup_V0_func, v(v0_index), mat_a.read(v0_index));
       }
 
       // The rest of the V panel of reflectors can just point to the values in A, since they are
       // well formed in-place.
-      for (auto row = dist.template nextLocalTileFromGlobalTile<Coord::Row>(Ai_start_global.row() + 1);
+      for (auto row = dist.template nextLocalTileFromGlobalTile<Coord::Row>(ai_start.row() + 1);
            row < dist.localNrTiles().rows(); ++row) {
         const LocalTileIndex idx{row, ai_offset.cols()};
         v.set_tile(idx, mat_a.read(idx));
       }
     }
 
-    vt.set_offset(At_start);
+    vt.set_offset(at_offset);
     matrix::broadcast(executor_mpi, rank_v0.col(), v, vt, serial_comm);
 
     // UPDATE TRAILING MATRIX
 
     // COMPUTE W
     // W = V . T
-    w.set_offset(At_start);
+    w.set_offset(at_offset);
 
     if (is_panel_rank_col)
       compute_w(w, v, t);
 
-    wt.set_offset(At_start);
+    wt.set_offset(at_offset);
     matrix::broadcast(executor_mpi, rank_v0.col(), w, wt, serial_comm);
 
     // COMPUTE X
@@ -820,8 +822,8 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
 
     // They have to be set to zero, because all tiles are going to be reduced, and some tiles may not get
     // "initialized" during computation, so they should not contribute with any spurious value to the final result
-    x.set_offset(At_start, true);
-    xt.set_offset(At_start, true);
+    x.set_offset(at_offset, true);
+    xt.set_offset(at_offset, true);
 
     compute_x(rank_v0.col(), x, xt, at_offset, mat_a, w, wt, serial_comm);
 
@@ -847,7 +849,7 @@ std::vector<hpx::shared_future<std::vector<T>>> ReductionToBand<Backend::MC, Dev
 
     // UPDATE
     // At = At - X . V* + V . X*
-    update_a(At_start, mat_a, x, vt, v, xt);
+    update_a(at_offset, mat_a, x, vt, v, xt);
 
     w.reset();
     wt.reset();
