@@ -30,7 +30,7 @@ template <class DataIn, class DataOut>
 void reduce(Communicator& communicator, MPI_Op reduce_op, const DataIn input, const DataOut output) {
   using T = std::remove_const_t<typename common::data_traits<DataIn>::element_t>;
 
-  DLAF_ASSERT_MODERATE(input != output, "input and output should not equal");
+  DLAF_ASSERT_MODERATE(input != output, "input and output should not equal (use in-place)");
 
   // Wayout for single rank communicator, just copy data
   if (communicator.size() == 1) {
@@ -123,12 +123,12 @@ void reduce(IndexT_MPI rank_root, Communicator& communicator, MPI_Op reduce_op, 
 /// MPI Reduce(see MPI documentation for additional info).
 /// @param rank_root the rank that will collect the result in output,
 /// @param reduce_op MPI_Op to perform on @p input data coming from ranks in @p communicator,
-/// @pre @p rank_root < @p communicator.size(),
+/// @pre @p 0 <= rank_root < @p communicator.size(),
 /// @pre @p rank_root != MPI_UNDEFINED.
 template <class DataIn, class DataOut>
 void reduce(const IndexT_MPI rank_root, Communicator& communicator, MPI_Op reduce_op, const DataIn input,
             const DataOut output) {
-  DLAF_ASSERT(rank_root < communicator.size() && rank_root != MPI_UNDEFINED, rank_root,
+  DLAF_ASSERT(0 <= rank_root && rank_root < communicator.size() && rank_root != MPI_UNDEFINED, rank_root,
               communicator.size());
 
   if (rank_root == communicator.rank())
