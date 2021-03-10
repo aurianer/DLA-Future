@@ -300,7 +300,7 @@ void update_trailing_panel(MatrixT<T>& a,
 
     // all-reduce W
     auto reduce_w_func = unwrapping([](auto&& tile_w, auto&& comm_wrapper) {
-      all_reduce(comm_wrapper.ref().colCommunicator(), MPI_SUM, make_data(tile_w), make_data(tile_w));
+      all_reduce(comm_wrapper.ref().colCommunicator(), MPI_SUM, make_data(tile_w));
     });
 
     hpx::dataflow(reduce_w_func, w(LocalTileIndex{0, 0}), serial_comm());
@@ -567,7 +567,7 @@ void compute_w2(MatrixT<T>& w2, ConstPanelT<Coord::Col, T>& w, ConstPanelT<Coord
 
   // all-reduce instead of computing it on each node, everyone in the panel should have it
   auto all_reduce_w2 = unwrapping([](auto&& tile_w2, auto&& comm_wrapper) {
-    all_reduce(comm_wrapper.ref().colCommunicator(), MPI_SUM, make_data(tile_w2), make_data(tile_w2));
+    all_reduce(comm_wrapper.ref().colCommunicator(), MPI_SUM, make_data(tile_w2));
   });
 
   FutureTile<T> tile_w2 = w2(LocalTileIndex{0, 0});
