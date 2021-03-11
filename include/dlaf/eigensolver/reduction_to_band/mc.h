@@ -238,125 +238,126 @@ void update_trailing_panel(MatrixT<T>& a,
   // 1B UPDATE TRAILING PANEL
   // for each tile in the panel, consider just the trailing panel
   // i.e. all rows (height = reflector), just columns to the right of the current reflector
-  if (index_el_x0.col() + 1 < nb) {
+  if (!(index_el_x0.col() + 1 < nb))
+    return;
+
     // 1B/1 Compute W
-    MatrixT<T> w({1, nb}, dist.blockSize());
-    set_to_zero(w);
+  MatrixT<T> w({1, nb}, dist.blockSize());
+  set_to_zero(w);
 
-    for (const LocalTileIndex& index_a_loc : ai_panel) {
-      const SizeType index_a_row = dist.template globalTileFromLocalTile<Coord::Row>(index_a_loc.row());
+  for (const LocalTileIndex& index_a_loc : ai_panel) {
+    const SizeType index_a_row = dist.template globalTileFromLocalTile<Coord::Row>(index_a_loc.row());
 
-      const bool has_first_component = (index_a_row == ai_start.row());
+    const bool has_first_component = (index_a_row == ai_start.row());
 
-      // GEMV w = Pt* . V
-      auto compute_w_func = unwrapping([=](auto&& tile_w, const auto& tile_a) {
-        const SizeType first_element = has_first_component ? index_el_x0.row() : 0;
+    // GEMV w = Pt* . V
+    auto compute_w_func = unwrapping([=](auto&& tile_w, const auto& tile_a) {
+      const SizeType first_element = has_first_component ? index_el_x0.row() : 0;
 
+      // clang-format off
+      TileElementIndex        pt_start  {first_element, index_el_x0.col() + 1};
+      TileElementSize         pt_size   {tile_a.size().rows() - pt_start.row(), tile_a.size().cols() - pt_start.col()};
+
+      TileElementIndex        v_start   {first_element, index_el_x0.col()};
+      const TileElementIndex  w_start   {0, index_el_x0.col() + 1};
+      // clang-format on
+
+      if (has_first_component) {
+        const TileElementSize offset{1, 0};
+
+        const T fake_v = 1;
         // clang-format off
-        TileElementIndex        pt_start  {first_element, index_el_x0.col() + 1};
-        TileElementSize         pt_size   {tile_a.size().rows() - pt_start.row(), tile_a.size().cols() - pt_start.col()};
-
-        TileElementIndex        v_start   {first_element, index_el_x0.col()};
-        const TileElementIndex  w_start   {0, index_el_x0.col() + 1};
+        blas::gemv(blas::Layout::ColMajor,
+            blas::Op::ConjTrans,
+            offset.rows(), pt_size.cols(),
+            static_cast<T>(1),
+            tile_a.ptr(pt_start), tile_a.ld(),
+            &fake_v, 1,
+            static_cast<T>(0),
+            tile_w.ptr(w_start), tile_w.ld());
         // clang-format on
 
-        if (has_first_component) {
-          const TileElementSize offset{1, 0};
+        pt_start = pt_start + offset;
+        v_start = v_start + offset;
+        pt_size = pt_size - offset;
+      }
 
-          const T fake_v = 1;
-          // clang-format off
-          blas::gemv(blas::Layout::ColMajor,
-              blas::Op::ConjTrans,
-              offset.rows(), pt_size.cols(),
-              static_cast<T>(1),
-              tile_a.ptr(pt_start), tile_a.ld(),
-              &fake_v, 1,
-              static_cast<T>(0),
-              tile_w.ptr(w_start), tile_w.ld());
-          // clang-format on
-
-          pt_start = pt_start + offset;
-          v_start = v_start + offset;
-          pt_size = pt_size - offset;
-        }
-
-        if (pt_start.isIn(tile_a.size())) {
-          // W += 1 . A* . V
-          // clang-format off
-          blas::gemv(blas::Layout::ColMajor,
-              blas::Op::ConjTrans,
-              pt_size.rows(), pt_size.cols(),
-              static_cast<T>(1),
-              tile_a.ptr(pt_start), tile_a.ld(),
-              tile_a.ptr(v_start), 1,
-              1,
-              tile_w.ptr(w_start), tile_w.ld());
-          // clang-format on
-        }
-      });
-
-      hpx::dataflow(compute_w_func, w(LocalTileIndex{0, 0}), a.read(index_a_loc));
-    }
-
-    // all-reduce W
-    auto reduce_w_func = unwrapping([](auto&& tile_w, auto&& comm_wrapper) {
-      all_reduce(comm_wrapper.ref().colCommunicator(), MPI_SUM, make_data(tile_w));
+      if (pt_start.isIn(tile_a.size())) {
+        // W += 1 . A* . V
+        // clang-format off
+        blas::gemv(blas::Layout::ColMajor,
+            blas::Op::ConjTrans,
+            pt_size.rows(), pt_size.cols(),
+            static_cast<T>(1),
+            tile_a.ptr(pt_start), tile_a.ld(),
+            tile_a.ptr(v_start), 1,
+            1,
+            tile_w.ptr(w_start), tile_w.ld());
+        // clang-format on
+      }
     });
 
-    hpx::dataflow(reduce_w_func, w(LocalTileIndex{0, 0}), serial_comm());
+    hpx::dataflow(compute_w_func, w(LocalTileIndex{0, 0}), a.read(index_a_loc));
+  }
 
-    // 1B/2 UPDATE TRAILING PANEL
-    for (const LocalTileIndex& index_a_loc : ai_panel) {
-      const SizeType index_a_row = dist.template globalTileFromLocalTile<Coord::Row>(index_a_loc.row());
+  // all-reduce W
+  auto reduce_w_func = unwrapping([](auto&& tile_w, auto&& comm_wrapper) {
+    all_reduce(comm_wrapper.ref().colCommunicator(), MPI_SUM, make_data(tile_w));
+  });
 
-      const bool has_first_component = (index_a_row == ai_start.row());
+  hpx::dataflow(reduce_w_func, w(LocalTileIndex{0, 0}), serial_comm());
 
-      // GER Pt = Pt - tau . v . w*
-      auto apply_reflector_func = unwrapping([=](auto&& tile_a, const T tau, const auto& tile_w) {
-        const SizeType first_element = has_first_component ? index_el_x0.row() : 0;
+  // 1B/2 UPDATE TRAILING PANEL
+  for (const LocalTileIndex& index_a_loc : ai_panel) {
+    const SizeType index_a_row = dist.template globalTileFromLocalTile<Coord::Row>(index_a_loc.row());
 
+    const bool has_first_component = (index_a_row == ai_start.row());
+
+    // GER Pt = Pt - tau . v . w*
+    auto apply_reflector_func = unwrapping([=](auto&& tile_a, const T tau, const auto& tile_w) {
+      const SizeType first_element = has_first_component ? index_el_x0.row() : 0;
+
+      // clang-format off
+      TileElementIndex        pt_start{first_element, index_el_x0.col() + 1};
+      TileElementSize         pt_size {tile_a.size().rows() - pt_start.row(), tile_a.size().cols() - pt_start.col()};
+
+      TileElementIndex        v_start {first_element, index_el_x0.col()};
+      const TileElementIndex  w_start {0, index_el_x0.col() + 1};
+      // clang-format on
+
+      if (has_first_component) {
+        const TileElementSize offset{1, 0};
+
+        // Pt = Pt - tau * v[0] * w*
         // clang-format off
-        TileElementIndex        pt_start{first_element, index_el_x0.col() + 1};
-        TileElementSize         pt_size {tile_a.size().rows() - pt_start.row(), tile_a.size().cols() - pt_start.col()};
-
-        TileElementIndex        v_start {first_element, index_el_x0.col()};
-        const TileElementIndex  w_start {0, index_el_x0.col() + 1};
+        const T fake_v = 1;
+        blas::ger(blas::Layout::ColMajor,
+            1, pt_size.cols(),
+            -dlaf::conj(tau),
+            &fake_v, 1,
+            tile_w.ptr(w_start), tile_w.ld(),
+            tile_a.ptr(pt_start), tile_a.ld());
         // clang-format on
 
-        if (has_first_component) {
-          const TileElementSize offset{1, 0};
+        pt_start = pt_start + offset;
+        v_start = v_start + offset;
+        pt_size = pt_size - offset;
+      }
 
-          // Pt = Pt - tau * v[0] * w*
-          // clang-format off
-          const T fake_v = 1;
-          blas::ger(blas::Layout::ColMajor,
-              1, pt_size.cols(),
-              -dlaf::conj(tau),
-              &fake_v, 1,
-              tile_w.ptr(w_start), tile_w.ld(),
-              tile_a.ptr(pt_start), tile_a.ld());
-          // clang-format on
+      if (pt_start.isIn(tile_a.size())) {
+        // Pt = Pt - tau * v * w*
+        // clang-format off
+        blas::ger(blas::Layout::ColMajor,
+            pt_size.rows(), pt_size.cols(),
+            -dlaf::conj(tau),
+            tile_a.ptr(v_start), 1,
+            tile_w.ptr(w_start), tile_w.ld(),
+            tile_a.ptr(pt_start), tile_a.ld());
+        // clang-format on
+      }
+    });
 
-          pt_start = pt_start + offset;
-          v_start = v_start + offset;
-          pt_size = pt_size - offset;
-        }
-
-        if (pt_start.isIn(tile_a.size())) {
-          // Pt = Pt - tau * v * w*
-          // clang-format off
-          blas::ger(blas::Layout::ColMajor,
-              pt_size.rows(), pt_size.cols(),
-              -dlaf::conj(tau),
-              tile_a.ptr(v_start), 1,
-              tile_w.ptr(w_start), tile_w.ld(),
-              tile_a.ptr(pt_start), tile_a.ld());
-          // clang-format on
-        }
-      });
-
-      hpx::dataflow(apply_reflector_func, a(index_a_loc), tau, w(LocalTileIndex{0, 0}));
-    }
+    hpx::dataflow(apply_reflector_func, a(index_a_loc), tau, w(LocalTileIndex{0, 0}));
   }
 }
 
