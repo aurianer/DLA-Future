@@ -241,8 +241,9 @@ void update_trailing_panel(MatrixT<T>& a,
   if (!(index_el_x0.col() + 1 < nb))
     return;
 
-    // 1B/1 Compute W
-  MatrixT<T> w({1, nb}, dist.blockSize());
+  // 1B/1 Compute W
+  // TODO it should be panel.cols() instead of nb
+  MatrixT<T> w({nb, 1}, dist.blockSize());
   set_to_zero(w);
 
   for (const LocalTileIndex& index_a_loc : ai_panel) {
@@ -259,7 +260,7 @@ void update_trailing_panel(MatrixT<T>& a,
       TileElementSize         pt_size   {tile_a.size().rows() - pt_start.row(), tile_a.size().cols() - pt_start.col()};
 
       TileElementIndex        v_start   {first_element, index_el_x0.col()};
-      const TileElementIndex  w_start   {0, index_el_x0.col() + 1};
+      const TileElementIndex  w_start   {0, 0};
       // clang-format on
 
       if (has_first_component) {
@@ -274,7 +275,7 @@ void update_trailing_panel(MatrixT<T>& a,
             tile_a.ptr(pt_start), tile_a.ld(),
             &fake_v, 1,
             static_cast<T>(0),
-            tile_w.ptr(w_start), tile_w.ld());
+            tile_w.ptr(w_start), 1);
         // clang-format on
 
         pt_start = pt_start + offset;
@@ -292,7 +293,7 @@ void update_trailing_panel(MatrixT<T>& a,
             tile_a.ptr(pt_start), tile_a.ld(),
             tile_a.ptr(v_start), 1,
             1,
-            tile_w.ptr(w_start), tile_w.ld());
+            tile_w.ptr(w_start), 1);
         // clang-format on
       }
     });
@@ -322,7 +323,7 @@ void update_trailing_panel(MatrixT<T>& a,
       TileElementSize         pt_size {tile_a.size().rows() - pt_start.row(), tile_a.size().cols() - pt_start.col()};
 
       TileElementIndex        v_start {first_element, index_el_x0.col()};
-      const TileElementIndex  w_start {0, index_el_x0.col() + 1};
+      const TileElementIndex  w_start {0, 0};
       // clang-format on
 
       if (has_first_component) {
@@ -335,7 +336,7 @@ void update_trailing_panel(MatrixT<T>& a,
             1, pt_size.cols(),
             -dlaf::conj(tau),
             &fake_v, 1,
-            tile_w.ptr(w_start), tile_w.ld(),
+            tile_w.ptr(w_start), 1,
             tile_a.ptr(pt_start), tile_a.ld());
         // clang-format on
 
@@ -351,13 +352,13 @@ void update_trailing_panel(MatrixT<T>& a,
             pt_size.rows(), pt_size.cols(),
             -dlaf::conj(tau),
             tile_a.ptr(v_start), 1,
-            tile_w.ptr(w_start), tile_w.ld(),
+            tile_w.ptr(w_start), 1,
             tile_a.ptr(pt_start), tile_a.ld());
         // clang-format on
       }
     });
 
-    hpx::dataflow(apply_reflector_func, a(index_a_loc), tau, w(LocalTileIndex{0, 0}));
+    hpx::dataflow(apply_reflector_func, a(index_a_loc), tau, w.read(LocalTileIndex{0, 0}));
   }
 }
 
