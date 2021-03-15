@@ -171,13 +171,13 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
         if (k != nrtile - 1) {
           panel_col_t.set_tile(diag_wp_idx, mat_a.read(kk_idx));
           dataflow(executor_mpi, comm::sendTile_o, mpi_task_chain(), Coord::Col,
-              panel_col_t.read(diag_wp_idx));
+                   panel_col_t.read(diag_wp_idx));
         }
       }
       else {
         if (k != nrtile - 1)
-          dataflow(executor_mpi, comm::recvTile_o, mpi_task_chain(), Coord::Col, panel_col_t(diag_wp_idx),
-              kk_rank.row());
+          dataflow(executor_mpi, comm::recvTile_o, mpi_task_chain(), Coord::Col,
+                   panel_col_t(diag_wp_idx), kk_rank.row());
       }
     }
 
@@ -216,7 +216,7 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
         const auto i = distr.localTileFromGlobalTile<Coord::Row>(jt_idx);
 
         herk_trailing_diag_tile(trailing_matrix_executor, panel_col.read({Coord::Row, i}),
-            mat_a(LocalTileIndex{i, j}));
+                                mat_a(LocalTileIndex{i, j}));
       }
 
       for (SizeType i_idx = jt_idx + 1; i_idx < nrtile; ++i_idx) {
