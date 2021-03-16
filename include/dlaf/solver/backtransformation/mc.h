@@ -25,6 +25,7 @@
 #include "dlaf/communication/communicator_grid.h"
 #include "dlaf/communication/functions_sync.h"
 #include "dlaf/communication/init.h"
+#include "dlaf/factorization/qr.h"
 #include "dlaf/lapack_tile.h"
 #include "dlaf/matrix/copy.h"
 #include "dlaf/matrix/copy_tile.h"
@@ -41,6 +42,11 @@ namespace internal {
 
 using namespace dlaf::matrix;
 
+template <class T>
+void set_zero(Matrix<T, Device::CPU>& mat) {
+  dlaf::matrix::util::set(mat, [](auto&&) { return static_cast<T>(0.0); });
+}
+ 
 // Implementation based on:
 // 1. Part of algorithm 6 "LAPACK Algorithm for the eigenvector back-transformation", page 15, PhD thesis
 // "GPU Accelerated Implementations of a Generalized Eigenvalue Solver for Hermitian Matrices with
@@ -48,18 +54,18 @@ using namespace dlaf::matrix;
 // 2. Report "Gep + back-transformation", Alberto Invernizzi (2020)
 // 3. Report "Reduction to band + back-transformation", Raffaele Solcà (2020)
 // 4. G. H. Golub and C. F. Van Loan, Matrix Computations, chapter 5, The Johns Hopkins University Press
- template <class T>
+template <class T>
 struct BackTransformation<Backend::MC, Device::CPU, T> {
   static void call_FC(Matrix<T, Device::CPU>& mat_c, Matrix<const T, Device::CPU>& mat_v,
-                      Matrix<T, Device::CPU>& mat_t);
+                      common::internal::vector<hpx::shared_future<common::internal::vector<T>>> taus);
   static void call_FC(comm::CommunicatorGrid grid, Matrix<T, Device::CPU>& mat_c,
-                      Matrix<const T, Device::CPU>& mat_v, Matrix<T, Device::CPU>& mat_t);
+                      Matrix<const T, Device::CPU>& mat_v, common::internal::vector<hpx::shared_future<common::internal::vector<T>>> taus);
 };
 
 template <class T>
 void BackTransformation<Backend::MC, Device::CPU, T>::call_FC(Matrix<T, Device::CPU>& mat_c,
                                                               Matrix<const T, Device::CPU>& mat_v,
-                                                              Matrix<T, Device::CPU>& mat_t) {
+                                                              common::internal::vector<hpx::shared_future<common::internal::vector<T>>> taus) {
   constexpr auto Left = blas::Side::Left;
   constexpr auto Right = blas::Side::Right;
   constexpr auto Upper = blas::Uplo::Upper;
@@ -81,7 +87,23 @@ void BackTransformation<Backend::MC, Device::CPU, T>::call_FC(Matrix<T, Device::
   const SizeType n = mat_c.nrTiles().cols();
   const SizeType mb = mat_c.blockSize().rows();
   const SizeType nb = mat_c.blockSize().cols();
+  const SizeType ms = mat_c.size().rows();
+  const SizeType ns = mat_c.size().cols();
 
+  // Matrix T
+  comm::CommunicatorGrid comm_grid(MPI_COMM_WORLD, 1, 1, common::Ordering::ColumnMajor);
+  common::Pipeline<comm::CommunicatorGrid> serial_comm(comm_grid);
+  int tottaus;
+  if (ms < mb || ms == 0 || ns == 0)
+    tottaus = 0;
+  else
+    tottaus = (ms / mb - 1) * mb + ms % mb;
+  
+  LocalElementSize sizeT(tottaus, tottaus);
+  TileElementSize blockSizeT(mb, mb);
+  Matrix<T, Device::CPU> mat_t(sizeT, blockSizeT);
+  set_zero(mat_t);
+  
   Matrix<T, Device::CPU> mat_vv({mat_v.size().rows(), mb}, mat_v.blockSize());
   Matrix<T, Device::CPU> mat_w({mat_v.size().rows(), mb}, mat_v.blockSize());
   Matrix<T, Device::CPU> mat_w2({mb, mat_c.size().cols()}, mat_c.blockSize());
@@ -97,13 +119,13 @@ void BackTransformation<Backend::MC, Device::CPU, T>::call_FC(Matrix<T, Device::
     else
       last_mb = mat_v.size().cols() % mat_v.blockSize().cols();
   }
-
+  
   Matrix<T, Device::CPU> mat_vv_last({mat_v.size().rows(), last_mb}, mat_v.blockSize());
   Matrix<T, Device::CPU> mat_w_last({mat_v.size().rows(), last_mb}, mat_v.blockSize());
   Matrix<T, Device::CPU> mat_w2_last({last_mb, mat_c.size().cols()}, mat_c.blockSize());
 
-  const SizeType reflectors = mat_v.size().cols() / mat_v.blockSize().cols() - 1;
-
+  const SizeType reflectors = (mat_v.size().cols() < mat_v.size().rows()) ? mat_v.nrTiles().rows() - 2 : mat_v.nrTiles().cols() - 2;
+  
   for (SizeType k = reflectors; k > -1; --k) {
     bool is_last = (k == reflectors) ? true : false;
 
@@ -155,18 +177,30 @@ void BackTransformation<Backend::MC, Device::CPU, T>::call_FC(Matrix<T, Device::
       }
     }
 
+    int taupan;
     // Reset W2 to zero
     if (is_last) {
       matrix::util::set(mat_w2_last, [](auto&&) { return 0; });
+      taupan = last_mb;
     }
     else {
       matrix::util::set(mat_w2, [](auto&&) { return 0; });
+      taupan = mat_v.blockSize().cols();
     }
+    
+    // Matrix T
+  comm::CommunicatorGrid comm_grid(MPI_COMM_WORLD, 1, 1, common::Ordering::ColumnMajor);
+  common::Pipeline<comm::CommunicatorGrid> serial_comm(comm_grid);
 
+  const GlobalTileIndex v_start{k+1, k};
+  auto taus_panel = taus[k];
+  
+  dlaf::factorization::internal::computeTFactor<Backend::MC>(taupan, mat_v, v_start, taus_panel, mat_t(LocalTileIndex{k,k}), serial_comm);
+  
     for (SizeType i = k + 1; i < m; ++i) {
+      auto kk = LocalTileIndex{k, k};
       // WH = V T
       auto ik = LocalTileIndex{i, 0};
-      auto kk = LocalTileIndex{k, k};
       if (is_last) {
         hpx::dataflow(executor_normal, hpx::util::unwrapping(tile::trmm<T, Device::CPU>), Right, Upper,
                       ConjTrans, NonUnit, 1.0, mat_t.read(kk), std::move(mat_w_last(ik)));
@@ -212,6 +246,7 @@ void BackTransformation<Backend::MC, Device::CPU, T>::call_FC(Matrix<T, Device::
         }
       }
     }
+
   }
 }
 
@@ -219,184 +254,8 @@ template <class T>
 void BackTransformation<Backend::MC, Device::CPU, T>::call_FC(comm::CommunicatorGrid grid,
                                                               Matrix<T, Device::CPU>& mat_c,
                                                               Matrix<const T, Device::CPU>& mat_v,
-                                                              Matrix<T, Device::CPU>& mat_t) {
-  constexpr auto Left = blas::Side::Left;
-  constexpr auto Right = blas::Side::Right;
-  constexpr auto Upper = blas::Uplo::Upper;
-  constexpr auto Lower = blas::Uplo::Lower;
-  constexpr auto NoTrans = blas::Op::NoTrans;
-  constexpr auto ConjTrans = blas::Op::ConjTrans;
-  constexpr auto NonUnit = blas::Diag::NonUnit;
-
-  using hpx::util::unwrapping;
-
-  using hpx::execution::parallel_executor;
-  using hpx::resource::get_thread_pool;
-  using hpx::resource::pool_exists;
-  using hpx::threads::thread_priority;
-
-  parallel_executor executor_hp(&get_thread_pool("default"), thread_priority::high);
-  parallel_executor executor_normal(&get_thread_pool("default"), thread_priority::default_);
-
-  // Set up MPI
-  auto executor_mpi = (pool_exists("mpi")) ? parallel_executor(&get_thread_pool("mpi"), thread_priority::high) : executor_hp;
-  common::Pipeline<comm::CommunicatorGrid> serial_comm(std::move(grid));
-
-  const matrix::Distribution& distr_c = mat_c.distribution();
-  const matrix::Distribution& distr_t = mat_t.distribution();
-  const matrix::Distribution& distr_v = mat_v.distribution();
-
-  const SizeType m = mat_c.nrTiles().rows();
-  const SizeType n = mat_c.nrTiles().cols();
-  const SizeType mb = mat_c.blockSize().rows();
-  const SizeType nb = mat_c.blockSize().cols();
-
-  
-  Matrix<T, Device::CPU> mat_vv({mat_v.size().rows(), mb}, mat_v.blockSize());
-  Matrix<T, Device::CPU> mat_w({mat_v.size().rows(), mb}, mat_v.blockSize());
-  Matrix<T, Device::CPU> mat_w2({mb, mat_c.size().cols()}, mat_c.blockSize());
-
-  SizeType last_mb;
-
-  if (mat_v.blockSize().cols() == 1) {
-    last_mb = 1;
-  }
-  else {
-    if (mat_v.size().cols() % mat_v.blockSize().cols() == 0)
-      last_mb = mat_v.blockSize().cols();
-    else
-      last_mb = mat_v.size().cols() % mat_v.blockSize().cols();
-  }
-
-  Matrix<T, Device::CPU> mat_vv_last({mat_v.size().rows(), last_mb}, mat_v.blockSize());
-  Matrix<T, Device::CPU> mat_w_last({mat_v.size().rows(), last_mb}, mat_v.blockSize());
-  Matrix<T, Device::CPU> mat_w2_last({last_mb, mat_c.size().cols()}, mat_c.blockSize());
-
-  const SizeType reflectors = mat_v.size().cols() / mat_v.blockSize().cols() - 1;
-
-  for (SizeType k = reflectors; k > -1; --k) {
-    bool is_last = (k == reflectors) ? true : false;
-    
-    auto k_rank_row = distr_v.rankGlobalTile<Coord::Row>(k);
-    auto k_rank_col = distr_v.rankGlobalTile<Coord::Col>(k);
-    
-    void (&cpyReg)(TileElementSize, TileElementIndex, const matrix::Tile<const T, Device::CPU>&,
-                   TileElementIndex, const matrix::Tile<T, Device::CPU>&) = copy<T>;
-    void (&cpy)(const matrix::Tile<const T, Device::CPU>&, const matrix::Tile<T, Device::CPU>&) =
-        copy<T>;
-
-    // Copy V panel into VV
-    for (SizeType i = 0; i < mat_v.nrTiles().rows(); ++i) {
-      auto i_rank_row = distr_v.rankGlobalTile<Coord::Row>(i);
-      
-      if (mat_v.rankIndex().col() == k_rank_col) {
-//	//Send V(ik) row-wise 
-//	comm::send_tile(executor_mpi, serial_comm, Coord::Row, mat_v.read(LocalTileIndex(i, k))
-	std::cout << "k " << k << " is_last " << is_last << std::endl;
-    
-	
-	if (is_last) {
-	  TileElementSize region = mat_vv_last.read(LocalTileIndex(i, 0)).get().size();
-	  TileElementIndex idx_in(0, 0);
-	  TileElementIndex idx_out(0, 0);
-	  hpx::dataflow(executor_hp, hpx::util::unwrapping(cpyReg), region, idx_in,
-			mat_v.read(LocalTileIndex(i, k)), idx_out, mat_vv_last(LocalTileIndex(i, 0)));
-	}
-	else {
-	  hpx::dataflow(executor_hp, hpx::util::unwrapping(cpy), mat_v.read(LocalTileIndex(i, k)),
-			mat_vv(LocalTileIndex(i, 0)));
-	}
-	
-      }
-
-//      // Fixing elements of VV and copying them into WH
-//      if (is_last) {
-//        auto tile_v = mat_vv_last(LocalTileIndex{i, 0}).get();
-//        if (i <= k) {
-//          lapack::laset(lapack::MatrixType::General, tile_v.size().rows(), tile_v.size().cols(), 0, 0,
-//                        tile_v.ptr(), tile_v.ld());
-//        }
-//        else if (i == k + 1) {
-//          lapack::laset(lapack::MatrixType::Upper, tile_v.size().rows(), tile_v.size().cols(), 0, 1,
-//                        tile_v.ptr(), tile_v.ld());
-//        }
-//        hpx::dataflow(executor_hp, hpx::util::unwrapping(cpy), mat_vv_last.read(LocalTileIndex(i, 0)),
-//                      mat_w_last(LocalTileIndex(i, 0)));
-//      }
-//      else {
-//        auto tile_v = mat_vv(LocalTileIndex{i, 0}).get();
-//        if (i <= k) {
-//          lapack::laset(lapack::MatrixType::General, tile_v.size().rows(), tile_v.size().cols(), 0, 0,
-//                        tile_v.ptr(), tile_v.ld());
-//        }
-//        else if (i == k + 1) {
-//          lapack::laset(lapack::MatrixType::Upper, tile_v.size().rows(), tile_v.size().cols(), 0, 1,
-//                        tile_v.ptr(), tile_v.ld());
-//        }
-//        hpx::dataflow(executor_hp, hpx::util::unwrapping(cpy), mat_vv.read(LocalTileIndex(i, 0)),
-//                      mat_w(LocalTileIndex(i, 0)));
-//      }
-    }
-
-//    // Reset W2 to zero
-//    if (is_last) {
-//      matrix::util::set(mat_w2_last, [](auto&&) { return 0; });
-//    }
-//    else {
-//      matrix::util::set(mat_w2, [](auto&&) { return 0; });
-//    }
-//
-//    for (SizeType i = k + 1; i < m; ++i) {
-//      // WH = V T
-//      auto ik = LocalTileIndex{i, 0};
-//      auto kk = LocalTileIndex{k, k};
-//      if (is_last) {
-//        hpx::dataflow(executor_normal, hpx::util::unwrapping(tile::trmm<T, Device::CPU>), Right, Upper,
-//                      ConjTrans, NonUnit, 1.0, mat_t.read(kk), std::move(mat_w_last(ik)));
-//      }
-//      else {
-//        hpx::dataflow(executor_normal, hpx::util::unwrapping(tile::trmm<T, Device::CPU>), Right, Upper,
-//                      ConjTrans, NonUnit, 1.0, mat_t.read(kk), std::move(mat_w(ik)));
-//      }
-//    }
-//
-//    for (SizeType j = 0; j < n; ++j) {
-//      auto kj = LocalTileIndex{0, j};
-//      for (SizeType i = k + 1; i < m; ++i) {
-//        auto ik = LocalTileIndex{i, 0};
-//        auto ij = LocalTileIndex{i, j};
-//        // W2 = W C
-//        if (is_last) {
-//          hpx::dataflow(executor_normal, hpx::util::unwrapping(tile::gemm<T, Device::CPU>), ConjTrans,
-//                        NoTrans, 1.0, std::move(mat_w_last(ik)), mat_c.read(ij), 1.0,
-//                        std::move(mat_w2_last(kj)));
-//        }
-//        else {
-//          hpx::dataflow(executor_normal, hpx::util::unwrapping(tile::gemm<T, Device::CPU>), ConjTrans,
-//                        NoTrans, 1.0, std::move(mat_w(ik)), mat_c.read(ij), 1.0, std::move(mat_w2(kj)));
-//        }
-//      }
-//    }
-//    
-//    for (SizeType i = k + 1; i < m; ++i) {
-//      auto ik = LocalTileIndex{i, 0};
-//      for (SizeType j = 0; j < n; ++j) {
-//        auto kj = LocalTileIndex{0, j};
-//        auto ij = LocalTileIndex{i, j};
-//        // C = C - V W2
-//        if (is_last) {
-//          hpx::dataflow(executor_normal, hpx::util::unwrapping(tile::gemm<T, Device::CPU>), NoTrans,
-//                        NoTrans, -1.0, mat_vv_last.read(ik), mat_w2_last.read(kj), 1.0,
-//                        std::move(mat_c(ij)));
-//        }
-//        else {
-//          hpx::dataflow(executor_normal, hpx::util::unwrapping(tile::gemm<T, Device::CPU>), NoTrans,
-//                        NoTrans, -1.0, mat_vv.read(ik), mat_w2.read(kj), 1.0, std::move(mat_c(ij)));
-//        }
-//      }
-//    }
-  }
-
+                                                              common::internal::vector<hpx::shared_future<common::internal::vector<T>>> taus) {
+  DLAF_UNIMPLEMENTED(grid);
 }
 
 /// ---- ETI
