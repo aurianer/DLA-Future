@@ -306,22 +306,11 @@ void BackTransformation<Backend::MC, Device::CPU, T>::call_FC(comm::Communicator
   TileElementSize blockSizeT(mb, mb);
   Matrix<T, Device::CPU> mat_t(sizeT, blockSizeT);
   set_zero(mat_t);
-  
-  comm::Index2D src_rank_index = mat_v.distribution().sourceRankIndex();
 
-  LocalElementSize size_vw(mat_v.size().rows(), mb);
-  GlobalElementSize size_vv(size_vw.rows(), size_vw.cols());
-  Distribution dist_vv(size_vv, mat_v.blockSize(), grid.size(), grid.rank(), src_rank_index);
-  Matrix<T, Device::CPU> mat_vv(std::move(dist_vv));
-
-  GlobalElementSize size_w(size_vw.rows(), size_vw.cols());
-  Distribution dist_w(size_w, mat_v.blockSize(), grid.size(), grid.rank(), src_rank_index);
-  Matrix<T, Device::CPU> mat_w(std::move(dist_w));
-
-  LocalElementSize sz_w2(mb, mat_v.size().cols());
-  GlobalElementSize size_w2(sz_w2.rows(), sz_w2.cols());
-  Distribution dist_w2(size_w2, mat_v.blockSize(), grid.size(), grid.rank(), src_rank_index);
-  Matrix<T, Device::CPU> mat_w2(std::move(dist_w2));
+    
+  Matrix<T, Device::CPU> mat_vv({mat_v.size().rows(), mb}, mat_v.blockSize());
+  Matrix<T, Device::CPU> mat_w({mat_v.size().rows(), mb}, mat_v.blockSize());
+  Matrix<T, Device::CPU> mat_w2({mb, mat_c.size().cols()}, mat_c.blockSize());
 
   SizeType last_mb;
 
@@ -334,149 +323,129 @@ void BackTransformation<Backend::MC, Device::CPU, T>::call_FC(comm::Communicator
     else
       last_mb = mat_v.size().cols() % mat_v.blockSize().cols();
   }
-
-  LocalElementSize sz_vv_last(mat_v.size().rows(), last_mb);
-  GlobalElementSize size_vv_last(sz_vv_last.rows(), sz_vv_last.cols());
-  Distribution dist_vv_last(size_vv_last, mat_v.blockSize(), grid.size(), grid.rank(), src_rank_index);
-  Matrix<T, Device::CPU> mat_vv_last(std::move(dist_vv_last));
-
-  GlobalElementSize size_w_last(sz_vv_last.rows(), sz_vv_last.cols());
-  Distribution dist_w_last(size_w_last, mat_v.blockSize(), grid.size(), grid.rank(), src_rank_index);
-  Matrix<T, Device::CPU> mat_w_last(std::move(dist_w_last));
-
-  LocalElementSize sz_w2_last(last_mb, mat_v.size().cols());
-  GlobalElementSize size_w2_last(sz_w2_last.rows(), sz_w2_last.cols());
-  Distribution dist_w2_last(size_w2_last, mat_v.blockSize(), grid.size(), grid.rank(), src_rank_index);
-  Matrix<T, Device::CPU> mat_w2_last(std::move(dist_w2_last));
-
+  
+  Matrix<T, Device::CPU> mat_vv_last({mat_v.size().rows(), last_mb}, mat_v.blockSize());
+  Matrix<T, Device::CPU> mat_w_last({mat_v.size().rows(), last_mb}, mat_v.blockSize());
+  Matrix<T, Device::CPU> mat_w2_last({last_mb, mat_c.size().cols()}, mat_c.blockSize());
+  
+  //std::cout << " vv size " << mat_vv.size() << " rank " << this_rank << std::endl;
+  
  //  Compute number of reflectors
   const SizeType reflectors = (mat_v.size().cols() < mat_v.size().rows()) ? mat_v.nrTiles().rows() - 2 : mat_v.nrTiles().cols() - 2;
-  
 
   //Main loop
   for (SizeType k = reflectors; k > -1; --k) {
     bool is_last = (k == reflectors) ? true : false;
+    
+    void (&cpyReg)(TileElementSize, TileElementIndex, const matrix::Tile<const T, Device::CPU>&, TileElementIndex, const matrix::Tile<T, Device::CPU>&) = copy<T>;
+    void (&cpy)(const matrix::Tile<const T, Device::CPU>&, const matrix::Tile<T, Device::CPU>&) = copy<T>;
 
-    void (&cpyReg)(TileElementSize, TileElementIndex, const matrix::Tile<const T, Device::CPU>&,
-                   TileElementIndex, const matrix::Tile<T, Device::CPU>&) = copy<T>;
-    void (&cpy)(const matrix::Tile<const T, Device::CPU>&, const matrix::Tile<T, Device::CPU>&) =
-        copy<T>;
+    for (SizeType i_local = mat_v.distribution().template nextLocalTileFromGlobalTile<Coord::Row>(0); i_local < c_local_rows; ++i_local) {
+      common::internal::vector<hpx::shared_future<Tile<const T, Device::CPU>>> ik_tile(dist_v.localNrTiles().rows());
+      auto i = mat_v.distribution().template globalTileFromLocalTile<Coord::Row>(i_local);
 
-    // Copy V panel into VV
-      for (SizeType i = 0; i < mat_v.nrTiles().rows(); ++i) {      
-	auto i_local = dist_v.template localTileFromGlobalTile<Coord::Row>(i);
-	
-	common::internal::vector<hpx::shared_future<Tile<const T, Device::CPU>>> ik_tile(dist_v.localNrTiles().rows());
-
-	if (is_last) {	
-	  auto i_rank_row = dist_v.template rankGlobalTile<Coord::Row>(i);
-	  auto k_rank_col = dist_v.template rankGlobalTile<Coord::Col>(k);
-	  //std::cout << "last i " << i << " k " << k << std::endl;
-	  auto i_rr_vv = mat_vv_last.distribution().template rankGlobalTile<Coord::Row>(i);
-	  auto i_rc_vv = mat_vv_last.distribution().template rankGlobalTile<Coord::Col>(0);
-
-	  if (this_rank.row() == i_rank_row) {	    
-	    // Broadcast V(i,k) row-wise
-	    if (this_rank.col() == k_rank_col) {
-	      //std::cout << " sending i row " << i << " col " << k << " rank " << this_rank << std::endl;
-	      auto i_local_row = dist_v.template localTileFromGlobalTile<Coord::Row>(i);
-	      auto k_local_col = dist_v.template localTileFromGlobalTile<Coord::Col>(k);
-	      auto ik = LocalTileIndex(i_local_row, k_local_col);
-	      ik_tile[i_local] = mat_v.read(ik);
-	      hpx::dataflow(executor_mpi, comm::sendTile_o, serial_comm(), Coord::Row, mat_v.read(ik));
-	    }
-	    else {
-	      //std::cout << " receiving i row " << i << " col " << k << " rank " << this_rank << std::endl;
-	      ik_tile[i_local] = hpx::dataflow(executor_mpi, comm::recvAllocTile<T>, serial_comm(), Coord::Row, mat_vv_last.tileSize(GlobalTileIndex(i, 0)), k_rank_col);
-	    }
-	  }
-	  
-	  if (this_rank.row() == i_rr_vv && this_rank.col() == i_rc_vv) {
-	    auto i_local_row = mat_vv_last.distribution().template localTileFromGlobalTile<Coord::Row>(i);
-	    auto k_local_col = mat_vv_last.distribution().template localTileFromGlobalTile<Coord::Col>(0);
-	    auto i0 = LocalTileIndex(i_local_row, k_local_col);
-	    //	    std::cout << " mao " << this_rank.row() << " " << this_rank.col() << " i0 " << i0 << " mat_vv_last "  << mat_vv_last.read(i0).get()({0,0}) << std::endl;
-	    TileElementSize region = mat_vv_last.read(i0).get().size();
-	    TileElementIndex idx_in(0, 0);
-	    TileElementIndex idx_out(0, 0);
-	    //std::cout << "region " << region << " ik_tile " << ik_tile[i_local].get()({0,0}) << std::endl;
-	    hpx::dataflow(executor_hp, hpx::util::unwrapping(cpyReg), region, idx_in, ik_tile[i_local_row], idx_out, mat_vv_last(LocalTileIndex(i_local, 0)));
-	    //std::cout << " mao " << this_rank.row() << " " << this_rank.col() << " i0 " << i0 << " mat_vv_last "  << mat_vv_last.read(i0).get()({0,0}) << std::endl;	   
-	  }
-	}
-	else {
-	  auto i_rank_row = dist_v.template rankGlobalTile<Coord::Row>(i);
-	  auto k_rank_col = dist_v.template rankGlobalTile<Coord::Col>(k);
-	  //std::cout << " i " << i << " k " << k << std::endl;
-	  auto i_rr_vv = mat_vv.distribution().template rankGlobalTile<Coord::Row>(i);
-	  auto i_rc_vv = mat_vv.distribution().template rankGlobalTile<Coord::Col>(0);
-
-	  if (this_rank.row() == i_rank_row) {	    
-	    // Broadcast V(i,k) row-wise
-	    if (this_rank.col() == k_rank_col) {
-	      //std::cout << " sending i row " << i << " col " << k << " rank " << this_rank << std::endl;
-	      auto i_local_row = dist_v.template localTileFromGlobalTile<Coord::Row>(i);
-	      auto k_local_col = dist_v.template localTileFromGlobalTile<Coord::Col>(k);
-	      auto ik = LocalTileIndex(i_local_row, k_local_col);
-	      ik_tile[i_local] = mat_v.read(ik);
-	      hpx::dataflow(executor_mpi, comm::sendTile_o, serial_comm(), Coord::Row, mat_v.read(ik));
-	    }
-	    else {
-	      //std::cout << " receiving i row " << i << " col " << k << " rank " << this_rank << std::endl;
-	      ik_tile[i_local] = hpx::dataflow(executor_mpi, comm::recvAllocTile<T>, serial_comm(), Coord::Row, mat_vv_last.tileSize(GlobalTileIndex(i, 0)), k_rank_col);
-	    }
-	  }
-	  
-	  if (this_rank.row() == i_rr_vv && this_rank.col() == i_rc_vv) {
-	    auto i_local_row = mat_vv.distribution().template localTileFromGlobalTile<Coord::Row>(i);
-	    auto k_local_col = mat_vv.distribution().template localTileFromGlobalTile<Coord::Col>(0);
-	    auto i0 = LocalTileIndex(i_local_row, k_local_col);
-	    //std::cout << " mao " << this_rank.row() << " " << this_rank.col() << " i0 " << i0 << " mat_vv "  << mat_vv.read(i0).get()({0,0}) << " i_tile " << ik_tile[i_local_row].get()({0,0}) << std::endl;
-	    hpx::dataflow(executor_mpi, hpx::util::unwrapping(cpy), ik_tile[i_local_row], mat_vv(LocalTileIndex(i_local, 0)));
-	    //std::cout << " frr " << this_rank.row() << " " << this_rank.col() << " i0 " << i0 << " mat_vv "  << mat_vv.read(i0).get()({0,0}) << std::endl;	   
-	  }
-	}
-	
-	// Fixing elements of VV and copying them into WH
+      // Copy V panel into VV
+      auto k_rank_col = dist_v.template rankGlobalTile<Coord::Col>(k);
+      auto k_local_col = dist_v.template localTileFromGlobalTile<Coord::Col>(k);
+      auto ik = LocalTileIndex{i_local, k_local_col};
+      auto i0 = LocalTileIndex(i_local, 0);
+      
+      if (this_rank.col() == k_rank_col) {
 	if (is_last) {
-	  auto i_rank_row = mat_vv_last.distribution().template rankGlobalTile<Coord::Row>(i);
-	  auto k_rank_col = mat_vv_last.distribution().template rankGlobalTile<Coord::Col>(0);
-	  auto i_local_row = mat_vv_last.distribution().template localTileFromGlobalTile<Coord::Row>(i);
-	  auto k_local_col = mat_vv_last.distribution().template localTileFromGlobalTile<Coord::Col>(0);
-	  auto i0 = LocalTileIndex(i_local_row, k_local_col);
-
-	  if (this_rank.row() == i_rank_row && this_rank.col() == k_rank_col) {
-	    auto tile_v = mat_vv_last(i0).get();
-	    if (i <= k) {
-	      lapack::laset(lapack::MatrixType::General, tile_v.size().rows(), tile_v.size().cols(), 0, 0,
-			    tile_v.ptr(), tile_v.ld());
-	    }
-	    else if (i == k + 1) {
-	      lapack::laset(lapack::MatrixType::Upper, tile_v.size().rows(), tile_v.size().cols(), 0, 1,
-			    tile_v.ptr(), tile_v.ld());
-	    }
-	    hpx::dataflow(executor_mpi, hpx::util::unwrapping(cpy), mat_vv_last.read(i0), mat_w_last(i0));
-	  }
+	  TileElementSize region = mat_vv_last.read(i0).get().size();
+	  TileElementIndex idx_in(0, 0);
+	  TileElementIndex idx_out(0, 0);
+	  hpx::dataflow(executor_hp, hpx::util::unwrapping(cpyReg), region, idx_in, mat_v.read(ik), idx_out, mat_vv_last(i0));
+	  //std::cout << " last mat_vv " << mat_vv_last.read(i0).get()({0,0}) << " i0 " << i0 << " i " << i << " k " << k << " rank " << this_rank << std::endl;
 	}
 	else {
-	  auto i_rank_row = mat_vv.distribution().template rankGlobalTile<Coord::Row>(i);
-	  auto k_rank_col = mat_vv.distribution().template rankGlobalTile<Coord::Col>(0);
-	  auto i_local_row = mat_vv.distribution().template localTileFromGlobalTile<Coord::Row>(i);
-	  auto k_local_col = mat_vv.distribution().template localTileFromGlobalTile<Coord::Col>(0);
-	  auto i0 = LocalTileIndex(i_local_row, k_local_col);
-
-	  if (this_rank.row() == i_rank_row && this_rank.col() == k_rank_col) {
-	    auto tile_v = mat_vv(i0).get();
-	    if (i <= k) {
-	      lapack::laset(lapack::MatrixType::General, tile_v.size().rows(), tile_v.size().cols(), 0, 0, tile_v.ptr(), tile_v.ld());
-	    }
-	    else if (i == k + 1) {
-	      lapack::laset(lapack::MatrixType::Upper, tile_v.size().rows(), tile_v.size().cols(), 0, 1, tile_v.ptr(), tile_v.ld());
-	    }
-	    hpx::dataflow(executor_mpi, hpx::util::unwrapping(cpy), mat_vv.read(i0), mat_w(i0));
-	  }
+	  TileElementSize region = mat_vv.read(i0).get().size();
+	  TileElementIndex idx_in(0, 0);
+	  TileElementIndex idx_out(0, 0);
+	  hpx::dataflow(executor_hp, hpx::util::unwrapping(cpyReg), region, idx_in, mat_v.read(ik), idx_out, mat_vv(i0));
+	  //std::cout << " mat_vv " << mat_vv.read(i0).get()({0,0}) << " i0 " << i0 << " i " << i << " k " << k  << std::endl;
 	}
+      }
 
+      // Fixing elements of VV and copying them into WH
+      if (is_last) {
+//	auto i_rank_row = mat_v.distribution().template rankGlobalTile<Coord::Row>(i);
+//	auto k_rank_col = mat_v.distribution().template rankGlobalTile<Coord::Col>(k);
+//	auto i_local_row = mat_v.distribution().template localTileFromGlobalTile<Coord::Row>(i);
+//	auto k_local_col = mat_v.distribution().template localTileFromGlobalTile<Coord::Col>(0);
+//	auto i0 = LocalTileIndex(i_local, 0);
+
+//	std::cout << " row rank " << i_rank_row << " vs " << mat_w_last.distribution().template rankGlobalTile<Coord::Row>(i) << " i " << i  << " k " << k << std::endl;
+//	std::cout << " col rank " << k_rank_col << " vs " << mat_w_last.distribution().template rankGlobalTile<Coord::Col>(0) << " i " << i  << " k " << k << std::endl;
+//	std::cout << "this rank " << this_rank << " vv " << mat_vv_last.read(i0).get()({0,0}) << std::endl;
+
+	if (this_rank.col() == k_rank_col) {
+	  //std::cout << "this-rank " << this_rank << " i0 " << i0 << " i_local " << i_local << " i " << i << " k " << k  << " vv " << mat_vv_last.read(i0).get()({0,0}) << " w " << mat_w_last.read(i0).get()({0,0}) << std::endl;
+	  std::cout << "this-rank " << this_rank << " i0 " << i0 << " i_local " << i_local << " i " << i << " k " << k  << std::endl;
+	  auto tile_v = mat_vv_last(i0).get();
+	  if (i <= k) {
+	    lapack::laset(lapack::MatrixType::General, tile_v.size().rows(), tile_v.size().cols(), 0, 0, tile_v.ptr(), tile_v.ld());
+	  }
+	  else if (i == k + 1) {
+	    lapack::laset(lapack::MatrixType::Upper, tile_v.size().rows(), tile_v.size().cols(), 0, 1, tile_v.ptr(), tile_v.ld());
+	  }
+	  hpx::dataflow(executor_mpi, hpx::util::unwrapping(cpy), mat_vv_last.read(i0), std::move(mat_w_last(i0)));
+	  auto w_tile = mat_w_last.read(i0);
+	  std::cout << "this-rank " << this_rank << " i0 " << i0 << " i_local " << i_local << " i " << i << " k " << k  << " vv " << mat_vv_last.read(i0).get()({0,0}) << " w " << w_tile.get()({0,0}) << std::endl;
+	  //std::cout << " mat_w last " << mat_w_last.read(i0).get()({0,0}) <<  " i " << i << " k " << k << " rank " << this_rank << std::endl;
+	}
+      }
+      //      else {
+      //	auto i_rank_row = mat_vv.distribution().template rankGlobalTile<Coord::Row>(i);
+      //	auto k_rank_col = mat_vv.distribution().template rankGlobalTile<Coord::Col>(0);
+      //	auto i_local_row = mat_vv.distribution().template localTileFromGlobalTile<Coord::Row>(i);
+      //	auto k_local_col = mat_vv.distribution().template localTileFromGlobalTile<Coord::Col>(0);
+      //	auto i0 = LocalTileIndex(i_local_row, k_local_col);
+      //
+//	if (this_rank.row() == i_rank_row && this_rank.col() == k_rank_col) {
+//	  auto tile_v = mat_vv(i0).get();
+//	  if (i <= k) {
+//	    lapack::laset(lapack::MatrixType::General, tile_v.size().rows(), tile_v.size().cols(), 0, 0, tile_v.ptr(), tile_v.ld());
+//	  }
+//	  else if (i == k + 1) {
+//	    lapack::laset(lapack::MatrixType::Upper, tile_v.size().rows(), tile_v.size().cols(), 0, 1, tile_v.ptr(), tile_v.ld());
+//	  }
+//	  hpx::dataflow(executor_mpi, hpx::util::unwrapping(cpy), mat_vv.read(i0), mat_w(i0));
+//	  //std::cout << " mat_w " << mat_w.read(i0).get()({0,0}) <<  " i " << i << " k " << k << " rank " << this_rank << std::endl;
+//	}
+//      }
+//	
+//    }
+  
+
+
+//	if (is_last) {
+//	  //auto i = mat_vv_last.distribution().template globalTileFromLocalTile<Coord::Row>(i_local);
+//	  auto tile_v = mat_vv_last(i0).get();
+//	  if (i <= k) {
+//	    lapack::laset(lapack::MatrixType::General, tile_v.size().rows(), tile_v.size().cols(), 0, 0, tile_v.ptr(), tile_v.ld());
+//	  }
+//	  else if (i == k + 1) {
+//	    lapack::laset(lapack::MatrixType::Upper, tile_v.size().rows(), tile_v.size().cols(), 0, 1, tile_v.ptr(), tile_v.ld());
+//	  }
+//	  hpx::dataflow(executor_hp, hpx::util::unwrapping(cpy), mat_vv_last.read(i0), mat_w_last(i0));
+//	  std::cout << " mat_vv last " <<  " i " << i << " k " << k << " rank " << this_rank << std::endl;
+//	}
+//	else {
+//	  //auto i = mat_vv.distribution().template globalTileFromLocalTile<Coord::Row>(i_local);
+//	  auto tile_v = mat_vv(i0).get();
+//	  if (i <= k) {
+//	    lapack::laset(lapack::MatrixType::General, tile_v.size().rows(), tile_v.size().cols(), 0, 0, tile_v.ptr(), tile_v.ld());
+//	  }
+//	  else if (i == k + 1) {
+//	    lapack::laset(lapack::MatrixType::Upper, tile_v.size().rows(), tile_v.size().cols(), 0, 1, tile_v.ptr(), tile_v.ld());
+//	  }
+//	  hpx::dataflow(executor_hp, hpx::util::unwrapping(cpy), mat_vv.read(i0), mat_w(i0));
+//	  std::cout << " mat_vv " <<  " i " << i << " k " << k << " rank " << this_rank << std::endl;
+//	}
+//      }
+
+    }
 
     int taupan;
     // Reset W2 to zero
@@ -495,127 +464,201 @@ void BackTransformation<Backend::MC, Device::CPU, T>::call_FC(comm::Communicator
 
   auto kk = LocalTileIndex(k, k);
   dlaf::factorization::internal::computeTFactor<Backend::MC>(taupan, mat_v, v_start, taus_panel, mat_t(kk), serial_comm);
+  //std::cout << " k " << k << " mat_t " << mat_t.read(kk).get()({0,0}) << "  rank " << this_rank << std::endl;
   
-  for (SizeType i_local = mat_w.distribution().template nextLocalTileFromGlobalTile<Coord::Row>(k + 1); i_local < c_local_rows; ++i_local) {
+  for (SizeType i_local = mat_w.distribution().template nextLocalTileFromGlobalTile<Coord::Row>(k); i_local < c_local_rows; ++i_local) {
 
     //Broadcast T(k,k) column-wise
-    hpx::shared_future<Tile<const T, Device::CPU>> kk_tile;
-    
-    auto k_rank_row = mat_t.distribution().template rankGlobalTile<Coord::Row>(k);
-    auto k_rank_col = mat_t.distribution().template rankGlobalTile<Coord::Col>(k);
+    //    hpx::shared_future<Tile<const T, Device::CPU>> kk_tile;
+    //    
+    //    auto k_rank_row = mat_t.distribution().template rankGlobalTile<Coord::Row>(k);
+    //    auto k_rank_col = mat_t.distribution().template rankGlobalTile<Coord::Col>(k);
+    //
+    //    if (this_rank.col() == k_rank_col) {
+    //      if (this_rank.row() == k_rank_row) {
+    //	auto k_local_row = mat_t.distribution().template localTileFromGlobalTile<Coord::Row>(k);
+    //	auto k_local_col = mat_t.distribution().template localTileFromGlobalTile<Coord::Col>(k);
+    //	auto kk = LocalTileIndex(k_local_row, k_local_col);
+    //
+    //	kk_tile = mat_t.read(kk);
+    //	hpx::dataflow(executor_mpi, comm::sendTile_o, serial_comm(), Coord::Col, mat_t.read(kk));
+    //      }
+    //      else {
+    //	kk_tile = hpx::dataflow(executor_mpi, comm::recvAllocTile<T>, serial_comm(), Coord::Col, mat_t.tileSize(GlobalTileIndex(k, k)), k_rank_row);
+    //      }
+    //    }
+    //    std::cout << "kk_tile " << kk_tile.get()({0,0}) << " k " << k << " rank " << this_rank << std::endl;
 
-    if (this_rank.col() == k_rank_col) {
-      if (this_rank.row() == k_rank_row) {
-	auto k_local_row = mat_t.distribution().template localTileFromGlobalTile<Coord::Row>(k);
-	auto k_local_col = mat_t.distribution().template localTileFromGlobalTile<Coord::Col>(k);
-	auto kk = LocalTileIndex(k_local_row, k_local_col);
+//    if (is_last) {
+//      auto k_rank_row = mat_w_last.distribution().template rankGlobalTile<Coord::Row>(k);
+//      auto k_rank_col = mat_w_last.distribution().template rankGlobalTile<Coord::Col>(k);
+//
+//      if (this_rank.col() == k_rank_col) {
+//	if (this_rank.row() == k_rank_row) {
+//	  
+//	  //	auto k_local_row = mat_t.distribution().template localTileFromGlobalTile<Coord::Row>(k);
+//	  //	auto k_local_col = mat_t.distribution().template localTileFromGlobalTile<Coord::Col>(k);
+//	  //	auto kk = LocalTileIndex(k_local_row, k_local_col);
+//	  auto kk = LocalTileIndex(k, k);
+//	  
+//	  auto kk_tile = mat_t.read(kk);
+//	  std::cout << "kk_tile " << kk_tile.get()({0,0}) << " k " << k << " rank " << this_rank << std::endl;
+//	}
+//      }
+//    }
+//	// WH = V T
+//	if (is_last) {
+//	  auto i = mat_w_last.distribution().template globalTileFromLocalTile<Coord::Row>(i_local);
+//      
+//	  auto i_rank_row = mat_w_last.distribution().template rankGlobalTile<Coord::Row>(i);
+//	  auto k_rank_col = mat_w_last.distribution().template rankGlobalTile<Coord::Col>(0);
+//      
+//	  if (this_rank.row() == i_rank_row && this_rank.col() == k_rank_col) {
+//	    auto i_local_row = mat_w_last.distribution().template localTileFromGlobalTile<Coord::Row>(i);
+//	    auto i_local_col = mat_w_last.distribution().template localTileFromGlobalTile<Coord::Col>(0);
+//	    auto ik = LocalTileIndex{i_local_row, i_local_col};	
+//	    hpx::dataflow(executor_hp, hpx::util::unwrapping(tile::trmm<T, Device::CPU>), Right, Upper, ConjTrans, NonUnit, 1.0, mat_t.read(kk), std::move(mat_w_last(ik)));
+//	  }
+//	}
+//	else {
+//	  auto i = mat_w.distribution().template globalTileFromLocalTile<Coord::Row>(i_local);
+//      
+//	  auto i_rank_row = mat_w.distribution().template rankGlobalTile<Coord::Row>(i);
+//	  auto k_rank_col = mat_w.distribution().template rankGlobalTile<Coord::Col>(0);
+//      
+//	  if (this_rank.row() == i_rank_row && this_rank.col() == k_rank_col) {
+//	    auto i_local_row = mat_w.distribution().template localTileFromGlobalTile<Coord::Row>(i);
+//	    auto i_local_col = mat_w.distribution().template localTileFromGlobalTile<Coord::Col>(0);
+//	    auto ik = LocalTileIndex{i_local_row, i_local_col};
+//	    //        hpx::dataflow(executor_hp, hpx::util::unwrapping(tile::trmm<T, Device::CPU>), Right, Upper, ConjTrans, NonUnit, 1.0, mat_t.read(kk), std::move(mat_w(ik)));
+//	    hpx::dataflow(executor_hp, hpx::util::unwrapping(tile::trmm<T, Device::CPU>), Right, Upper, ConjTrans, NonUnit, 1.0, kk_tile, std::move(mat_w(ik)));
+//	  }
+//	}
+//      }
+//    }
 
-	kk_tile = mat_t.read(kk);
-	hpx::dataflow(executor_mpi, comm::sendTile_o, serial_comm(), Coord::Col, mat_t.read(kk));
-      }
-      else {
-	kk_tile = hpx::dataflow(executor_mpi, comm::recvAllocTile<T>, serial_comm(), Coord::Col, mat_t.tileSize(GlobalTileIndex(k, k)), k_rank_row);
-      }
-    }
-	  
-    // WH = V T
-    if (is_last) {
-      auto i = mat_w_last.distribution().template globalTileFromLocalTile<Coord::Row>(i_local);
-      
-      auto i_rank_row = mat_w_last.distribution().template rankGlobalTile<Coord::Row>(i);
-      auto k_rank_col = mat_w_last.distribution().template rankGlobalTile<Coord::Col>(0);
-      
-      if (this_rank.row() == i_rank_row && this_rank.col() == k_rank_col) {
-	auto i_local_row = mat_w_last.distribution().template localTileFromGlobalTile<Coord::Row>(i);
-	auto i_local_col = mat_w_last.distribution().template localTileFromGlobalTile<Coord::Col>(0);
-	auto ik = LocalTileIndex{i_local_row, i_local_col};	
-	hpx::dataflow(executor_hp, hpx::util::unwrapping(tile::trmm<T, Device::CPU>), Right, Upper, ConjTrans, NonUnit, 1.0, mat_t.read(kk), std::move(mat_w_last(ik)));
-      }
-    }
-    else {
-      auto i = mat_w.distribution().template globalTileFromLocalTile<Coord::Row>(i_local);
-      
-      auto i_rank_row = mat_w.distribution().template rankGlobalTile<Coord::Row>(i);
-      auto k_rank_col = mat_w.distribution().template rankGlobalTile<Coord::Col>(0);
-      
-      if (this_rank.row() == i_rank_row && this_rank.col() == k_rank_col) {
-	auto i_local_row = mat_w.distribution().template localTileFromGlobalTile<Coord::Row>(i);
-	auto i_local_col = mat_w.distribution().template localTileFromGlobalTile<Coord::Col>(0);
-	auto ik = LocalTileIndex{i_local_row, i_local_col};
-        hpx::dataflow(executor_hp, hpx::util::unwrapping(tile::trmm<T, Device::CPU>), Right, Upper, ConjTrans, NonUnit, 1.0, mat_t.read(kk), std::move(mat_w(ik)));
-      }
-    }
   }
 
-    for (SizeType j_local = 0; j_local < c_local_cols; ++j_local) {
-
-      // Broadcast W2(0,j) col-wise
-      hpx::shared_future<Tile<const T, Device::CPU>> w2_tile;
-      
-      if (is_last) {
-	auto j = mat_w2_last.distribution().template globalTileFromLocalTile<Coord::Col>(j_local);
-
-	auto j_rank_row = mat_w2_last.distribution().template rankGlobalTile<Coord::Row>(0);
-	auto j_rank_col = mat_w2_last.distribution().template rankGlobalTile<Coord::Col>(j);
-
-	if (this_rank.col() == j_rank_col) {
-	  if (this_rank.row() == j_rank_row) {
-	    auto j_local_row = mat_w2_last.distribution().template localTileFromGlobalTile<Coord::Row>(0);
-	    auto j_local_col = mat_w2_last.distribution().template localTileFromGlobalTile<Coord::Col>(j);
-	    auto jj = LocalTileIndex(j_local_row, j_local_col);
-
-	    w2_tile = mat_w2_last.read(jj);
-	    hpx::dataflow(executor_mpi, comm::sendTile_o, serial_comm(), Coord::Col, mat_w2_last.read(jj));
-	  }
-	  else {
-	    w2_tile = hpx::dataflow(executor_mpi, comm::recvAllocTile<T>, serial_comm(), Coord::Col, mat_w2_last.tileSize(GlobalTileIndex(0, j)), j_rank_row);
-	  }
-	}
-      }
-      else {
-	auto j = mat_w2.distribution().template globalTileFromLocalTile<Coord::Col>(j_local);
-
-	auto j_rank_row = mat_w2.distribution().template rankGlobalTile<Coord::Row>(0);
-	auto j_rank_col = mat_w2.distribution().template rankGlobalTile<Coord::Col>(j);
-
-	if (this_rank.col() == j_rank_col) {
-	  if (this_rank.row() == j_rank_row) {
-	    auto j_local_row = mat_w2.distribution().template localTileFromGlobalTile<Coord::Row>(0);
-	    auto j_local_col = mat_w2.distribution().template localTileFromGlobalTile<Coord::Col>(j);
-	    auto jj = LocalTileIndex(j_local_row, j_local_col);
-
-	    w2_tile = mat_w2.read(jj);
-	    hpx::dataflow(executor_mpi, comm::sendTile_o, serial_comm(), Coord::Col, mat_w2.read(jj));
-	  }
-	  else {
-	    w2_tile = hpx::dataflow(executor_mpi, comm::recvAllocTile<T>, serial_comm(), Coord::Col, mat_w2.tileSize(GlobalTileIndex(0, j)), j_rank_row);
-	  }
-	}
-      }
-
-      //      auto kj = LocalTileIndex{0, j};
-
-      for (SizeType i_local = mat_w.distribution().template nextLocalTileFromGlobalTile<Coord::Row>(k + 1); i_local < c_local_rows; ++i_local) {
-
-      // Broadcast W(i,0) row-wise
-
-
-
-
-//        auto ik = LocalTileIndex{i, 0};
-//        auto ij = LocalTileIndex{i, j};
-//        // W2 = W C
-//        if (is_last) {
-//          hpx::dataflow(executor_normal, hpx::util::unwrapping(tile::gemm<T, Device::CPU>), ConjTrans,
-//                        NoTrans, 1.0, std::move(mat_w_last(ik)), mat_c.read(ij), 1.0,
-//                        std::move(mat_w2_last(kj)));
-//        }
-//        else {
-//          hpx::dataflow(executor_normal, hpx::util::unwrapping(tile::gemm<T, Device::CPU>), ConjTrans,
-//                        NoTrans, 1.0, std::move(mat_w(ik)), mat_c.read(ij), 1.0, std::move(mat_w2(kj)));
-//        }
-      }
-    }
+//    for (SizeType j_local = 0; j_local < c_local_cols; ++j_local) {
+//
+//      // Broadcast W2(0,j) col-wise
+//      hpx::shared_future<Tile<const T, Device::CPU>> w2_tile;
+//      
+//      if (is_last) {
+//	auto j = mat_w2_last.distribution().template globalTileFromLocalTile<Coord::Col>(j_local);
+//
+//	auto j_rank_row = mat_w2_last.distribution().template rankGlobalTile<Coord::Row>(0);
+//	auto j_rank_col = mat_w2_last.distribution().template rankGlobalTile<Coord::Col>(j);
+//
+//	if (this_rank.col() == j_rank_col) {
+//	  if (this_rank.row() == j_rank_row) {
+//	    auto j_local_row = mat_w2_last.distribution().template localTileFromGlobalTile<Coord::Row>(0);
+//	    auto j_local_col = mat_w2_last.distribution().template localTileFromGlobalTile<Coord::Col>(j);
+//	    auto jj = LocalTileIndex(j_local_row, j_local_col);
+//
+//	    w2_tile = mat_w2_last.read(jj);
+//	    hpx::dataflow(executor_mpi, comm::sendTile_o, serial_comm(), Coord::Col, mat_w2_last.read(jj));
+//	  }
+//	  else {
+//	    w2_tile = hpx::dataflow(executor_mpi, comm::recvAllocTile<T>, serial_comm(), Coord::Col, mat_w2_last.tileSize(GlobalTileIndex(0, j)), j_rank_row);
+//	  }
+//	}
+//      }
+//      else {
+//	auto j = mat_w2.distribution().template globalTileFromLocalTile<Coord::Col>(j_local);
+//
+//	auto j_rank_row = mat_w2.distribution().template rankGlobalTile<Coord::Row>(0);
+//	auto j_rank_col = mat_w2.distribution().template rankGlobalTile<Coord::Col>(j);
+//
+//	if (this_rank.col() == j_rank_col) {
+//	  if (this_rank.row() == j_rank_row) {
+//	    auto j_local_row = mat_w2.distribution().template localTileFromGlobalTile<Coord::Row>(0);
+//	    auto j_local_col = mat_w2.distribution().template localTileFromGlobalTile<Coord::Col>(j);
+//	    auto jj = LocalTileIndex(j_local_row, j_local_col);
+//
+//	    w2_tile = mat_w2.read(jj);
+//	    hpx::dataflow(executor_mpi, comm::sendTile_o, serial_comm(), Coord::Col, mat_w2.read(jj));
+//	  }
+//	  else {
+//	    w2_tile = hpx::dataflow(executor_mpi, comm::recvAllocTile<T>, serial_comm(), Coord::Col, mat_w2.tileSize(GlobalTileIndex(0, j)), j_rank_row);
+//	  }
+//	}
+//      }
+//      
+//      for (SizeType i_local = mat_w.distribution().template nextLocalTileFromGlobalTile<Coord::Row>(k + 1); i_local < c_local_rows; ++i_local) {
+//
+//      // Broadcast W(i,0) row-wise
+//      hpx::shared_future<Tile<const T, Device::CPU>> w_tile;
+//      
+//      if (is_last) {
+//	auto i = mat_w_last.distribution().template globalTileFromLocalTile<Coord::Row>(i_local);
+//
+//	auto i_rank_row = mat_w_last.distribution().template rankGlobalTile<Coord::Row>(i);
+//	auto i_rank_col = mat_w_last.distribution().template rankGlobalTile<Coord::Col>(0);
+//
+//	if (this_rank.row() == i_rank_row) {
+//	  if (this_rank.col() == i_rank_col) {
+//	    auto i_local_row = mat_w_last.distribution().template localTileFromGlobalTile<Coord::Row>(i);
+//	    auto i_local_col = mat_w_last.distribution().template localTileFromGlobalTile<Coord::Col>(0);
+//	    auto ii = LocalTileIndex(i_local_row, i_local_col);
+//
+//	    w_tile = mat_w_last.read(ii);
+//	    hpx::dataflow(executor_mpi, comm::sendTile_o, serial_comm(), Coord::Row, mat_w_last.read(ii));
+//	  }
+//	  else {
+//	    w_tile = hpx::dataflow(executor_mpi, comm::recvAllocTile<T>, serial_comm(), Coord::Row, mat_w_last.tileSize(GlobalTileIndex(i, 0)), i_rank_col);
+//	  }
+//	}
+//      }
+//      else {
+//	auto i = mat_w.distribution().template globalTileFromLocalTile<Coord::Row>(i_local);
+//
+//	auto i_rank_row = mat_w.distribution().template rankGlobalTile<Coord::Row>(i);
+//	auto i_rank_col = mat_w.distribution().template rankGlobalTile<Coord::Col>(0);
+//	
+//	if (this_rank.row() == i_rank_row) {
+//	  if (this_rank.col() == i_rank_col) {
+//	    auto i_local_row = mat_w.distribution().template localTileFromGlobalTile<Coord::Row>(i);
+//	    auto i_local_col = mat_w.distribution().template localTileFromGlobalTile<Coord::Col>(0);
+//	    auto ii = LocalTileIndex(i_local_row, i_local_col);
+//
+//	    w_tile = mat_w.read(ii);
+//	    hpx::dataflow(executor_mpi, comm::sendTile_o, serial_comm(), Coord::Row, mat_w.read(ii));
+//	  }
+//	  else {
+//	    w_tile = hpx::dataflow(executor_mpi, comm::recvAllocTile<T>, serial_comm(), Coord::Row, mat_w.tileSize(GlobalTileIndex(i, 0)), i_rank_col);
+//	  }
+//	}
+//      }
+//
+//
+//      // W2 = W C
+//	auto i_c = mat_c.distribution().template globalTileFromLocalTile<Coord::Row>(i_local);
+//	auto j_c = mat_c.distribution().template globalTileFromLocalTile<Coord::Col>(j_local);
+//	
+//	auto i_rank_row = mat_c.distribution().template rankGlobalTile<Coord::Row>(i_c);
+//	auto j_rank_col = mat_c.distribution().template rankGlobalTile<Coord::Col>(j_c);
+//
+//	if (this_rank.row() == i_rank_row) {
+//	  if (this_rank.col() == j_rank_col) {
+//	    auto i_local_row = mat_c.distribution().template localTileFromGlobalTile<Coord::Row>(i_c);
+//	    auto j_local_col = mat_c.distribution().template localTileFromGlobalTile<Coord::Col>(j_c);
+//	    auto ij = LocalTileIndex(i_local_row, j_local_col);
+//	    //	    std::cout << "w_tile " << w_tile.get()({0,0}) << std::endl;
+//	    //std::cout << "w2_tile " << w2_tile.get()({0,0}) << " this_rank " << this_rank << std::endl;
+//	    
+//	    //hpx::dataflow(executor_np, hpx::util::unwrapping(tile::gemm<T, Device::CPU>), ConjTrans, NoTrans, 1.0, w_tile, mat_c.read(ij), 1.0, w2_tile);
+//	  }
+//	}
+//
+//	  //       if (is_last) {
+////        }
+////        else {
+////          hpx::dataflow(executor_normal, hpx::util::unwrapping(tile::gemm<T, Device::CPU>), ConjTrans,
+////                        NoTrans, 1.0, std::move(mat_w(ik)), mat_c.read(ij), 1.0, std::move(mat_w2(kj)));
+////        }
+//      }
+//    }
     
 //    for (SizeType i = k + 1; i < m; ++i) {
 //      auto ik = LocalTileIndex{i, 0};
@@ -633,7 +676,7 @@ void BackTransformation<Backend::MC, Device::CPU, T>::call_FC(comm::Communicator
 //                        NoTrans, -1.0, mat_vv.read(ik), mat_w2.read(kj), 1.0, std::move(mat_c(ij)));
 //        }
 //      }
-    }
+//    }
 
   }
 
