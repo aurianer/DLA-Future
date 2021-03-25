@@ -389,9 +389,9 @@ void BackTransformation<Backend::MC, Device::CPU, T>::call_FC(comm::Communicator
 	  else if (i == k + 1) {
 	    lapack::laset(lapack::MatrixType::Upper, tile_v.size().rows(), tile_v.size().cols(), 0, 1, tile_v.ptr(), tile_v.ld());
 	  }
-	  hpx::dataflow(executor_mpi, hpx::util::unwrapping(cpy), mat_vv_last.read(i0), std::move(mat_w_last(i0)));
-	  auto w_tile = mat_w_last.read(i0);
-	  std::cout << "this-rank " << this_rank << " i0 " << i0 << " i_local " << i_local << " i " << i << " k " << k  << " vv " << mat_vv_last.read(i0).get()({0,0}) << " w " << w_tile.get()({0,0}) << std::endl;
+	  hpx::dataflow(executor_mpi, hpx::util::unwrapping(cpy), mat_vv_last.read(i0), mat_w_last(i0));
+	  //auto w_tile = mat_w_last.read(i0).get();
+	  std::cout << "this-rank " << this_rank << " i0 " << i0 << " i_local " << i_local << " i " << i << " k " << k  << " vv " << tile_v({0,0}) << " w " << mat_w_last.read(i0).get()({0,0}) << std::endl;
 	  //std::cout << " mat_w last " << mat_w_last.read(i0).get()({0,0}) <<  " i " << i << " k " << k << " rank " << this_rank << std::endl;
 	}
       }
