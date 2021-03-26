@@ -455,17 +455,17 @@ void BackTransformation<Backend::MC, Device::CPU, T>::call_FC(comm::Communicator
       if (is_last) {
 	if (this_rank.row() == i_rank_row && this_rank.col() == k_rank_col) {
 	  hpx::dataflow(executor_hp, hpx::util::unwrapping(tile::trmm<T, Device::CPU>), Right, Upper, ConjTrans, NonUnit, 1.0, kk_tile, std::move(mat_w_last(ik)));
-	  std::cout << "LAST TRMM: i " << i << " k " << k << " mat t " << kk_tile.get()({0,0}) << " mat w " << mat_w_last.read(ik).get()({0,0}) << " rank " << this_rank << std::endl;
+	  //std::cout << "TRMM: last i " << i << " k " << k << " mat t " << kk_tile.get()({0,0}) << " mat w " << mat_w_last.read(ik).get()({0,0}) << " rank " << this_rank << std::endl;
 	}	
       }
       else {
 	if (this_rank.row() == i_rank_row && this_rank.col() == k_rank_col) {
 	  hpx::dataflow(executor_hp, hpx::util::unwrapping(tile::trmm<T, Device::CPU>), Right, Upper, ConjTrans, NonUnit, 1.0, kk_tile, std::move(mat_w(ik)));
-	  std::cout << "TRMM: i " << i << " k " << k << " mat t " << kk_tile.get()({0,0}) << " mat w " << mat_w.read(ik).get()({0,0}) << " rank " << this_rank << std::endl;
+	  //std::cout << "TRMM: i " << i << " k " << k << " mat t " << kk_tile.get()({0,0}) << " mat w " << mat_w.read(ik).get()({0,0}) << " rank " << this_rank << std::endl;
 	}
       }
 
-    }
+    } // end loop on i_local row
 
     for (SizeType j_local = mat_c.distribution().template nextLocalTileFromGlobalTile<Coord::Col>(0); j_local < c_local_cols; ++j_local) {
 
