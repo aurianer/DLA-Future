@@ -564,17 +564,35 @@ void BackTransformation<Backend::MC, Device::CPU, T>::call_FC(comm::Communicator
       	  if (this_rank.col() == j_c_rank_col) {
 	    if (is_last) {
 	      hpx::dataflow(executor_np, hpx::util::unwrapping(tile::gemm<T, Device::CPU>), ConjTrans, NoTrans, 1.0, w_tile, mat_c.read(ij), 1.0, std::move(mat_w2_last(kj)));
-	      std::cout << "GEMM1: last w_tile " << w_tile.get()({0,0}) << " w2 " << mat_w2_last.read(kj).get()({0,0}) << " mat_c " << mat_c.read(ij).get()({0,0}) << " ij " << ij <<  " rank " << this_rank << std::endl;
+	      //std::cout << "GEMM1: last w_tile " << w_tile.get()({0,0}) << " w2 " << mat_w2_last.read(kj).get()({0,0}) << " mat_c " << mat_c.read(ij).get()({0,0}) << " ij " << ij <<  " rank " << this_rank << std::endl;
 	    }
 	    else {
 	      hpx::dataflow(executor_np, hpx::util::unwrapping(tile::gemm<T, Device::CPU>), ConjTrans, NoTrans, 1.0, w_tile, mat_c.read(ij), 1.0, std::move(mat_w2_last(kj)));
-	      std::cout << "GEMM1: w_tile " << w_tile.get()({0,0}) << " w2 " << mat_w2_last.read(kj).get()({0,0}) << " mat_c " << mat_c.read(ij).get()({0,0}) << " ij " << ij <<  " rank " << this_rank << std::endl;
+	      //std::cout << "GEMM1: w_tile " << w_tile.get()({0,0}) << " w2 " << mat_w2_last.read(kj).get()({0,0}) << " mat_c " << mat_c.read(ij).get()({0,0}) << " ij " << ij <<  " rank " << this_rank << std::endl;
 	    }
       	  }
       	}
 
+      } // end loop on i_local (rows)
+    } // end loop on j_local (cols)
+
+
+    for (SizeType j_local = mat_c.distribution().template nextLocalTileFromGlobalTile<Coord::Col>(0); j_local < c_local_cols; ++j_local) {	
+      hpx::future<Tile<T, Device::CPU>> tile_w2;
+      if (is_last == true) {
+	tile_w2 = mat_w2_last(LocalTileIndex{0,j_local});
       }
-    }
+      else {
+	tile_w2 = mat_w2(LocalTileIndex{0,j_local});
+      }
+      
+      auto all_reduce_w2_func = unwrapping([](auto&& tile_w2, auto&& comm_wrapper) {
+	  comm::sync::all_reduce(comm_wrapper.ref().colCommunicator(), MPI_SUM, common::make_data(tile_w2), common::make_data(tile_w2));
+	});
+      
+      hpx::dataflow(std::move(all_reduce_w2_func), std::move(tile_w2), serial_comm());
+
+   }
 
 	
     //    for (SizeType i = k + 1; i < m; ++i) {
