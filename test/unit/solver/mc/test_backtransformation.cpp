@@ -60,8 +60,7 @@ const std::vector<std::tuple<SizeType, SizeType, SizeType, SizeType>> sizes = {
 //  {3, 0, 1, 1}, {0, 5, 2, 3},  // m, n = 0
 //  {2, 2, 3, 3}, {3, 4, 6, 7},  // m < mb
 //  {3, 3, 1, 1}, {4, 4, 2, 2}, {6, 3, 3, 3}, {12, 2, 4, 4}, {12, 24, 3, 3}, {24, 36, 6, 6},
-//  {5, 8, 3, 2}, {4, 6, 2, 3}, {5, 5, 2, 3}, {8, 27, 3, 4}, {15, 34, 4, 6},
-  {12, 2, 4, 4}
+  {5, 8, 3, 2}, {4, 6, 2, 3}, {5, 5, 2, 3}, {8, 27, 3, 4}, {15, 34, 4, 6},
 };
 
 template <class T>
@@ -188,9 +187,6 @@ void testBacktransformationEigenv(comm::CommunicatorGrid grid, SizeType m, SizeT
   Matrix<T, Device::CPU> mat_v(std::move(distrV));
   dlaf::matrix::util::set_random(mat_v);
 
-//  std::cout << "mat_c " << mat_c << std::endl;
-//  std::cout << "mat_v " << mat_v << std::endl;
-
   int tottaus;
   if (m < mb || m == 0 || n == 0) {
     tottaus = 0;
@@ -231,7 +227,6 @@ void testBacktransformationEigenv(comm::CommunicatorGrid grid, SizeType m, SizeT
 
     MatrixLocal<T> tausloc({tottaus,1},{mb,mb});
     auto tau_rows = tausloc.nrTiles().rows();
-
     
     auto nt = 0;
     for (SizeType i = 0; i < tau_rows; ++i) {
