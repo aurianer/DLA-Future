@@ -7,8 +7,6 @@
 // Please, refer to the LICENSE file in the root directory.
 // SPDX-License-Identifier: BSD-3-Clause
 //
-#include "dlaf/communication/executor.h"
-#include "dlaf/communication/mech.h"
 #include "dlaf/factorization/cholesky.h"
 
 #include "gtest/gtest.h"
@@ -96,8 +94,7 @@ TYPED_TEST(CholeskyLocalTest, Correctness) {
   }
 }
 
-template <class TypeParam>
-void testDistCholesky(CholeskyDistributedTest<TypeParam>& test, comm::MPIMech mech) {
+TYPED_TEST(CholeskyDistributedTest, Correctness) {
   // Note: The tile elements are chosen such that:
   // - res_ij = 1 / 2^(|i-j|) * exp(I*(-i+j)),
   // where I = 0 for real types or I is the complex unit for complex types.
@@ -128,7 +125,7 @@ void testDistCholesky(CholeskyDistributedTest<TypeParam>& test, comm::MPIMech me
     return TypeUtilities<TypeParam>::polar(std::exp2(-std::abs(i - j)), -i + j);
   };
 
-  for (const auto& comm_grid : test.commGrids()) {
+  for (const auto& comm_grid : this->commGrids()) {
     for (const auto& size : square_sizes) {
       for (const auto& block_size : square_block_sizes) {
         // Matrix to undergo Cholesky decomposition
@@ -138,20 +135,12 @@ void testDistCholesky(CholeskyDistributedTest<TypeParam>& test, comm::MPIMech me
         Distribution distribution(sz, block_size, comm_grid.size(), comm_grid.rank(), src_rank_index);
         Matrix<TypeParam, Device::CPU> mat(std::move(distribution));
         set(mat, el);
-        factorization::cholesky<Backend::MC, Device::CPU, TypeParam>(comm_grid, blas::Uplo::Lower, mat,
-                                                                     mech);
+
+        factorization::cholesky<Backend::MC>(comm_grid, blas::Uplo::Lower, mat);
+
         CHECK_MATRIX_NEAR(res, mat, 4 * (mat.size().rows() + 1) * TypeUtilities<TypeParam>::error,
                           4 * (mat.size().rows() + 1) * TypeUtilities<TypeParam>::error);
       }
     }
   }
-}
-
-TYPED_TEST(CholeskyDistributedTest, DistCholesky_Yielding) {
-  testDistCholesky<TypeParam>(*this, comm::MPIMech::Yielding);
-}
-
-TYPED_TEST(CholeskyDistributedTest, DistCholesky_Polling) {
-  hpx::mpi::experimental::init(false, "default");
-  testDistCholesky<TypeParam>(*this, comm::MPIMech::Polling);
 }

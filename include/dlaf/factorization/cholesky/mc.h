@@ -21,7 +21,9 @@
 #include "dlaf/common/vector.h"
 #include "dlaf/communication/communicator.h"
 #include "dlaf/communication/communicator_grid.h"
+#include "dlaf/communication/executor.h"
 #include "dlaf/communication/functions_sync.h"
+#include "dlaf/communication/kernels.h"
 #include "dlaf/executors.h"
 #include "dlaf/factorization/cholesky/api.h"
 #include "dlaf/lapack_tile.h"
@@ -132,18 +134,27 @@ struct RoundRobin {
 template <class T>
 void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
                                                    Matrix<T, Device::CPU>& mat_a) {
+  using hpx::util::unwrapping;
+  using hpx::dataflow;
+
   auto executor_hp = dlaf::getHpExecutor<Backend::MC>();
   auto executor_np = dlaf::getNpExecutor<Backend::MC>();
-  auto executor_mpi = dlaf::getMPIExecutor<Backend::MC>();
 
-  common::Pipeline<comm::CommunicatorGrid> mpi_task_chain(std::move(grid));
+  // Set up MPI executor pipelines
+  std::string mpi_pool = (hpx::resource::pool_exists("mpi")) ? "mpi" : "default";
+  const comm::MPIMech mech = comm::MPIMech::Yielding;
+  comm::Executor executor_mpi_col(mpi_pool, mech);
+  comm::Executor executor_mpi_row(mpi_pool, mech);
+  common::Pipeline<comm::Communicator> mpi_col_task_chain(grid.colCommunicator());
+  common::Pipeline<comm::Communicator> mpi_row_task_chain(grid.rowCommunicator());
 
   const comm::Index2D this_rank = grid.rank();
+  const comm::Size2D grid_size = grid.size();
 
-  matrix::Distribution const& distr = mat_a.distribution();
+  const matrix::Distribution& distr = mat_a.distribution();
   const SizeType nrtile = mat_a.nrTiles().cols();
 
-  constexpr std::size_t N_WORKSPACES = 1;
+  constexpr std::size_t N_WORKSPACES = 2;
   RoundRobin<matrix::Panel<Coord::Col, T, Device::CPU>> panel_cols(N_WORKSPACES, distr);
   RoundRobin<matrix::Panel<Coord::Row, T, Device::CPU>> panel_cols_t(N_WORKSPACES, distr);
 
@@ -170,14 +181,15 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
         potrf_diag_tile(executor_hp, mat_a(kk_idx));
         if (k != nrtile - 1) {
           panel_col_t.set_tile(diag_wp_idx, mat_a.read(kk_idx));
-          dataflow(executor_mpi, comm::sendTile_o, mpi_task_chain(), Coord::Col,
-                   panel_col_t.read(diag_wp_idx));
+          dataflow(executor_mpi_col, unwrapping(comm::bcast_send<T>), panel_col_t.read(diag_wp_idx),
+                   mpi_col_task_chain());
         }
       }
       else {
-        if (k != nrtile - 1)
-          dataflow(executor_mpi, comm::recvTile_o, mpi_task_chain(), Coord::Col,
-                   panel_col_t(diag_wp_idx), kk_rank.row());
+        if (k != nrtile - 1) {
+          dataflow(executor_mpi_col, unwrapping(comm::bcastRecv<T>), panel_col_t(diag_wp_idx),
+                   kk_rank.row(), mpi_col_task_chain());
+        }
       }
     }
 
@@ -201,7 +213,10 @@ void Cholesky<Backend::MC, Device::CPU, T>::call_L(comm::CommunicatorGrid grid,
     panel_col_t.reset();
 
     // TODO skip last step tile
-    broadcast(executor_mpi, kk_rank.col(), panel_col, panel_col_t, mpi_task_chain);
+    broadcast(
+        executor_mpi_row, executor_mpi_col,
+        kk_rank.col(), panel_col, panel_col_t,
+        mpi_row_task_chain, mpi_col_task_chain, grid_size);
 
     // TRAILING MATRIX
     for (SizeType jt_idx = k + 1; jt_idx < nrtile; ++jt_idx) {

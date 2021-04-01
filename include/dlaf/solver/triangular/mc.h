@@ -404,7 +404,7 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(comm::CommunicatorGrid gr
                       mpi_row_task_chain());
       }
       else {
-        kk_tile = hpx::dataflow(executor_mpi_row, unwrapping(comm::bcast_recv<T>),
+        kk_tile = hpx::dataflow(executor_mpi_row, unwrapping(comm::bcastRecvAlloc<T>),
                                 mat_a.tileSize(GlobalTileIndex(k, k)), k_rank_col, mpi_row_task_chain());
       }
     }
@@ -426,7 +426,7 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(comm::CommunicatorGrid gr
       else {
         if (k != (mat_b.nrTiles().rows() - 1)) {
           panel[j_local] =
-              hpx::dataflow(executor_mpi_col, unwrapping(comm::bcast_recv<T>),
+              hpx::dataflow(executor_mpi_col, unwrapping(comm::bcastRecvAlloc<T>),
                             mat_b.tileSize(GlobalTileIndex(k, j)), k_rank_row, mpi_col_task_chain());
         }
       }
@@ -450,7 +450,7 @@ void Triangular<Backend::MC, Device::CPU, T>::call_LLN(comm::CommunicatorGrid gr
                       mpi_row_task_chain());
       }
       else {
-        ik_tile = hpx::dataflow(executor_mpi_row, unwrapping(comm::bcast_recv<T>),
+        ik_tile = hpx::dataflow(executor_mpi_row, unwrapping(comm::bcastRecvAlloc<T>),
                                 mat_a.tileSize(GlobalTileIndex(i, k)), k_rank_col, mpi_row_task_chain());
       }
 

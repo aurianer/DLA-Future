@@ -36,9 +36,18 @@ void bcast_send(matrix::Tile<const T, Device::CPU> const& tile, common::PromiseG
 
 // Non-blocking receiver broadcast
 template <class T>
-matrix::Tile<const T, Device::CPU> bcast_recv(TileElementSize tile_size, int root_rank,
-                                              common::PromiseGuard<Communicator> pcomm,
-                                              MPI_Request* req) {
+matrix::Tile<T, Device::CPU> bcastRecv(matrix::Tile<T, Device::CPU> tile, int root_rank,
+                                       common::PromiseGuard<Communicator> pcomm, MPI_Request* req) {
+  auto msg = comm::make_message(common::make_data(tile));
+  MPI_Ibcast(msg.data(), msg.count(), msg.mpi_type(), root_rank, pcomm.ref(), req);
+  return std::move(tile);
+}
+
+// Non-blocking receiver broadcast
+template <class T>
+matrix::Tile<const T, Device::CPU> bcastRecvAlloc(TileElementSize tile_size, int root_rank,
+                                                  common::PromiseGuard<Communicator> pcomm,
+                                                  MPI_Request* req) {
   using Tile_t = matrix::Tile<T, Device::CPU>;
   using ConstTile_t = matrix::Tile<const T, Device::CPU>;
   using MemView_t = memory::MemoryView<T, Device::CPU>;
