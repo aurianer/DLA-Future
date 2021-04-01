@@ -8,23 +8,27 @@
 // SPDX-License-Identifier: BSD-3-Clause
 //
 
+#include <blas/util.hh>
 #include <iostream>
 
 #include <mpi.h>
+#include <hpx/include/resource_partitioner.hpp>
 #include <hpx/init.hpp>
 
 #include "dlaf/auxiliary/norm.h"
+#include "dlaf/common/timer.h"
 #include "dlaf/communication/communicator_grid.h"
 #include "dlaf/communication/error.h"
+#include "dlaf/communication/executor.h"
+#include "dlaf/communication/functions_sync.h"
 #include "dlaf/communication/init.h"
+#include "dlaf/communication/mech.h"
 #include "dlaf/factorization/cholesky.h"
 #include "dlaf/init.h"
 #include "dlaf/matrix/copy.h"
 #include "dlaf/matrix/matrix.h"
 #include "dlaf/types.h"
 #include "dlaf/util_matrix.h"
-
-#include "dlaf/common/timer.h"
 
 namespace {
 
@@ -44,6 +48,7 @@ using dlaf::TileElementSize;
 using dlaf::common::Ordering;
 using dlaf::comm::Communicator;
 using dlaf::comm::CommunicatorGrid;
+using dlaf::comm::MPIMech;
 
 using T = double;
 using MatrixType = dlaf::Matrix<T, Device::CPU>;
@@ -57,7 +62,7 @@ using ConstTileType = MatrixType::ConstTileType;
 /// this function checks that A == L * L'
 void check_cholesky(MatrixType& A, MatrixType& L, CommunicatorGrid comm_grid);
 
-enum class CHECK_RESULT { NONE, LAST, ALL };
+enum class CholCheckIterFreq { None, Last, All };
 
 struct options_t {
   SizeType m;
@@ -66,18 +71,27 @@ struct options_t {
   int grid_cols;
   int64_t nruns;
   int64_t nwarmups;
-  CHECK_RESULT do_check;
+  CholCheckIterFreq do_check;
+  MPIMech mech;
 };
 
 /// Handle CLI options
-options_t check_options(hpx::program_options::variables_map& vm);
+options_t parse_options(hpx::program_options::variables_map&);
+
+MPIMech parse_mech(const std::string&);
+
+CholCheckIterFreq parse_chol_check(const std::string&);
 
 }
 
 int hpx_main(hpx::program_options::variables_map& vm) {
   dlaf::initialize(vm);
+  options_t opts = parse_options(vm);
 
-  options_t opts = check_options(vm);
+  // Only needed for the `polling` approach
+  std::string mpi_pool = (hpx::resource::pool_exists("mpi")) ? "mpi" : "default";
+  hpx::mpi::experimental::init(false, mpi_pool);
+  // hpx::mpi::experimental::enable_user_polling internal_helper(mpi_pool);
 
   Communicator world(MPI_COMM_WORLD);
   CommunicatorGrid comm_grid(world, opts.grid_rows, opts.grid_cols, Ordering::ColumnMajor);
@@ -112,7 +126,8 @@ int hpx_main(hpx::program_options::variables_map& vm) {
     }
 
     dlaf::common::Timer<> timeit;
-    dlaf::factorization::cholesky<Backend::MC>(comm_grid, blas::Uplo::Lower, matrix);
+    dlaf::factorization::cholesky<Backend::MC, Device::CPU, T>(comm_grid, blas::Uplo::Lower, matrix,
+                                                               opts.mech);
 
     // wait for last task and barrier for all ranks
     {
@@ -140,10 +155,8 @@ int hpx_main(hpx::program_options::variables_map& vm) {
                 << hpx::get_os_thread_count() << std::endl;
 
     // (optional) run test
-    if (opts.do_check != CHECK_RESULT::NONE) {
-      if (opts.do_check == CHECK_RESULT::LAST && run_index != (opts.nruns - 1))
-        continue;
-
+    if ((opts.do_check == CholCheckIterFreq::Last && run_index == (opts.nruns - 1)) ||
+        opts.do_check == CholCheckIterFreq::All) {
       MatrixType original(matrix_size, block_size, comm_grid);
       copy(matrix_ref, original);
       check_cholesky(original, matrix, comm_grid);
@@ -156,7 +169,8 @@ int hpx_main(hpx::program_options::variables_map& vm) {
 }
 
 int main(int argc, char** argv) {
-  dlaf::comm::mpi_init mpi_initter(argc, argv, dlaf::comm::mpi_thread_level::serialized);
+  // Init MPI
+  dlaf::comm::mpi_init mpi_initter(argc, argv, dlaf::comm::mpi_thread_level::multiple);
 
   // options
   using namespace hpx::program_options;
@@ -164,13 +178,14 @@ int main(int argc, char** argv) {
 
   // clang-format off
   desc_commandline.add_options()
-    ("matrix-size",  value<SizeType>()   ->default_value(4096),                        "Matrix size")
-    ("block-size",   value<SizeType>()   ->default_value( 256),                        "Block cyclic distribution size")
-    ("grid-rows",    value<int>()        ->default_value(   1),                        "Number of row processes in the 2D communicator")
-    ("grid-cols",    value<int>()        ->default_value(   1),                        "Number of column processes in the 2D communicator")
-    ("nruns",        value<int64_t>()    ->default_value(   1),                        "Number of runs to compute the cholesky")
-    ("nwarmups",     value<int64_t>()    ->default_value(   1),                        "Number of warmup runs")
-    ("check-result", value<std::string>()->default_value(  "")->implicit_value("all"), "Enable result check ('all', 'last')")
+    ("matrix-size",  value<SizeType>()   ->default_value(4096),       "Matrix size")
+    ("block-size",   value<SizeType>()   ->default_value( 256),       "Block cyclic distribution size")
+    ("grid-rows",    value<int>()        ->default_value(   1),       "Number of row processes in the 2D communicator")
+    ("grid-cols",    value<int>()        ->default_value(   1),       "Number of column processes in the 2D communicator")
+    ("nruns",        value<int64_t>()    ->default_value(   1),       "Number of runs to compute the cholesky")
+    ("nwarmups",     value<int64_t>()    ->default_value(   1),       "Number of warmup runs")
+    ("check-result", value<std::string>()->default_value("none"),     "Enable result checking ('none', 'all', 'last')")
+    ("mech",         value<std::string>()->default_value("yielding"), "MPI mechanism ('yielding', 'polling')")
   ;
   // clang-format on
 
@@ -190,10 +205,7 @@ int main(int argc, char** argv) {
       rp.add_resource(rp.numa_domains()[0].cores()[0].pus()[0], "mpi");
     }
   };
-
-  auto ret_code = hpx::init(argc, argv, p);
-
-  return ret_code;
+  return hpx::init(argc, argv, p);
 }
 
 namespace {
@@ -397,13 +409,19 @@ void check_cholesky(MatrixType& A, MatrixType& L, CommunicatorGrid comm_grid) {
   std::cout << "Max Diff / Max A: " << diff_ratio << std::endl;
 }
 
-options_t check_options(hpx::program_options::variables_map& vm) {
+options_t parse_options(hpx::program_options::variables_map& vm) {
+  // clang-format off
   options_t opts = {
-      vm["matrix-size"].as<SizeType>(), vm["block-size"].as<SizeType>(), vm["grid-rows"].as<int>(),
+      vm["matrix-size"].as<SizeType>(),
+      vm["block-size"].as<SizeType>(),
+      vm["grid-rows"].as<int>(),
       vm["grid-cols"].as<int>(),
-
-      vm["nruns"].as<int64_t>(),        vm["nwarmups"].as<int64_t>(),    CHECK_RESULT::NONE,
+      vm["nruns"].as<int64_t>(),
+      vm["nwarmups"].as<int64_t>(),
+      parse_chol_check(vm["check-result"].as<std::string>()),
+      parse_mech(vm["mech"].as<std::string>())
   };
+  // clang-format on
 
   DLAF_ASSERT(opts.m > 0, opts.m);
   DLAF_ASSERT(opts.mb > 0, opts.mb);
@@ -412,23 +430,40 @@ options_t check_options(hpx::program_options::variables_map& vm) {
   DLAF_ASSERT(opts.nruns > 0, opts.nruns);
   DLAF_ASSERT(opts.nwarmups >= 0, opts.nwarmups);
 
-  const std::string check_type = vm["check-result"].as<std::string>();
-
-  if (check_type.compare("all") == 0)
-    opts.do_check = CHECK_RESULT::ALL;
-  else if (check_type.compare("last") == 0)
-    opts.do_check = CHECK_RESULT::LAST;
-  else if (check_type.compare("") != 0)
-    throw std::runtime_error(check_type + " is not a valid value for check-result");
-
-  if (opts.do_check != CHECK_RESULT::NONE && opts.m % opts.mb) {
+  if (opts.do_check != CholCheckIterFreq::None && opts.m % opts.mb) {
     std::cerr
         << "Warning! At the moment result checking works just with matrix sizes that are multiple of the block size."
         << std::endl;
-    opts.do_check = CHECK_RESULT::NONE;
+    opts.do_check = CholCheckIterFreq::None;
   }
 
   return opts;
+}
+
+MPIMech parse_mech(const std::string& mech) {
+  if (mech == "yielding") {
+    return MPIMech::Yielding;
+  }
+  else if (mech == "polling") {
+    return MPIMech::Polling;
+  }
+
+  std::cout << "Parsing is not implemented for --mech=" << mech << "!" << std::endl;
+  std::terminate();
+  return MPIMech::Yielding;  // unreachable
+}
+
+CholCheckIterFreq parse_chol_check(const std::string& check) {
+  if (check == "all")
+    return CholCheckIterFreq::All;
+  else if (check == "last")
+    return CholCheckIterFreq::Last;
+  else if (check == "none")
+    return CholCheckIterFreq::None;
+
+  std::cout << "Parsing is not implemented for --check-result=" << check << "!" << std::endl;
+  std::terminate();
+  return CholCheckIterFreq::None;  // unreachable
 }
 
 }

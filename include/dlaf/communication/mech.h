@@ -9,16 +9,10 @@
 //
 #pragma once
 
-#include "dlaf/communication/mech.h"
-#include "dlaf/types.h"
-
 namespace dlaf {
-namespace factorization {
-namespace internal {
+namespace comm {
 
-template <Backend backend, Device device, class T>
-struct Cholesky {};
+enum class MPIMech { Polling, Yielding };
 
-}
 }
 }

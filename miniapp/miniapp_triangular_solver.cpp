@@ -20,6 +20,7 @@
 #include "dlaf/common/timer.h"
 #include "dlaf/communication/communicator_grid.h"
 #include "dlaf/communication/init.h"
+#include "dlaf/communication/mech.h"
 #include "dlaf/init.h"
 #include "dlaf/matrix/index.h"
 #include "dlaf/matrix/matrix.h"
@@ -40,6 +41,7 @@ using dlaf::TileElementSize;
 using dlaf::comm::Communicator;
 using dlaf::comm::CommunicatorGrid;
 using dlaf::common::Ordering;
+using dlaf::comm::MPIMech;
 
 using T = double;
 using MatrixType = dlaf::Matrix<T, Device::CPU>;
@@ -54,9 +56,12 @@ struct options_t {
   int64_t nruns;
   int64_t nwarmups;
   bool do_check;
+  MPIMech mech;
 };
 
 options_t check_options(hpx::program_options::variables_map& vm);
+
+MPIMech parse_mech(const std::string&);
 
 void waitall_tiles(MatrixType& matrix);
 
@@ -69,6 +74,11 @@ int hpx_main(hpx::program_options::variables_map& vm) {
   dlaf::initialize(vm);
 
   options_t opts = check_options(vm);
+
+  // Only needed for the `polling` approach
+  std::string mpi_pool = (hpx::resource::pool_exists("mpi")) ? "mpi" : "default";
+  hpx::mpi::experimental::init(false, mpi_pool);
+  // hpx::mpi::experimental::enable_user_polling internal_helper(mpi_pool);
 
   Communicator world(MPI_COMM_WORLD);
   CommunicatorGrid comm_grid(world, opts.grid_rows, opts.grid_cols, Ordering::ColumnMajor);
@@ -109,7 +119,8 @@ int hpx_main(hpx::program_options::variables_map& vm) {
     sync_barrier();
 
     dlaf::common::Timer<> timeit;
-    dlaf::solver::triangular<Backend::MC>(comm_grid, side, uplo, op, diag, alpha, a, b);
+    dlaf::solver::triangular<Backend::MC, Device::CPU, T>(comm_grid, side, uplo, op, diag, alpha, a, b,
+                                                          opts.mech);
 
     sync_barrier();
 
@@ -143,7 +154,7 @@ int hpx_main(hpx::program_options::variables_map& vm) {
 }
 
 int main(int argc, char** argv) {
-  dlaf::comm::mpi_init mpi_initter(argc, argv, dlaf::comm::mpi_thread_level::serialized);
+  dlaf::comm::mpi_init mpi_initter(argc, argv, dlaf::comm::mpi_thread_level::multiple);
 
   // options
   using namespace hpx::program_options;
@@ -154,15 +165,16 @@ int main(int argc, char** argv) {
 
   // clang-format off
   desc_commandline.add_options()
-    ("m",             value<SizeType>()->default_value(4096),  "Matrix b rows")
-    ("n",             value<SizeType>()->default_value(512),   "Matrix b columns")
-    ("mb",            value<SizeType>()->default_value(256),   "Matrix b block rows")
-    ("nb",            value<SizeType>()->default_value(512),   "Matrix b block columns")
-    ("grid-rows",     value<int>()     ->default_value(1),     "Number of row processes in the 2D communicator.")
-    ("grid-cols",     value<int>()     ->default_value(1),     "Number of column processes in the 2D communicator.")
-    ("nruns",         value<int64_t>() ->default_value(1),     "Number of runs to compute the cholesky")
-    ("nwarmups",      value<int64_t>() ->default_value(1),     "Number of warmup runs")
-    ("check-result",  bool_switch()    ->default_value(false), "Check the triangular system solution (for each run)")
+    ("m",             value<SizeType>()  ->default_value(4096),       "Matrix b rows")
+    ("n",             value<SizeType>()  ->default_value(512),        "Matrix b columns")
+    ("mb",            value<SizeType>()  ->default_value(256),        "Matrix b block rows")
+    ("nb",            value<SizeType>()  ->default_value(512),        "Matrix b block columns")
+    ("grid-rows",     value<int>()       ->default_value(1),          "Number of row processes in the 2D communicator.")
+    ("grid-cols",     value<int>()       ->default_value(1),          "Number of column processes in the 2D communicator.")
+    ("nruns",         value<int64_t>()   ->default_value(1),          "Number of runs to compute the cholesky")
+    ("nwarmups",      value<int64_t>()   ->default_value(1),          "Number of warmup runs")
+    ("check-result",  bool_switch()      ->default_value(false),      "Check the triangular system solution (for each run)")
+    ("mech",         value<std::string>()->default_value("yielding"), "MPI mechanism ('yielding', 'polling')")
   ;
   // clang-format on
 
@@ -182,10 +194,7 @@ int main(int argc, char** argv) {
       rp.add_resource(rp.numa_domains()[0].cores()[0].pus()[0], "mpi");
     }
   };
-
-  auto ret_code = hpx::init(argc, argv, p);
-
-  return ret_code;
+  return hpx::init(argc, argv, p);
 }
 
 namespace {
@@ -200,6 +209,7 @@ options_t check_options(hpx::program_options::variables_map& vm) {
     vm["nruns"].as<int64_t>(),
     vm["nwarmups"].as<int64_t>(),
     vm["check-result"].as<bool>(),
+    parse_mech(vm["mech"].as<std::string>())
   };
   // clang-format on
 
@@ -279,4 +289,18 @@ linear_system_t sampleLeftTr(blas::Uplo uplo, blas::Op op, blas::Diag diag, T al
 
   return {el_op_a, el_b, el_x};
 }
+
+MPIMech parse_mech(const std::string& mech) {
+  if (mech == "yielding") {
+    return MPIMech::Yielding;
+  }
+  else if (mech == "polling") {
+    return MPIMech::Polling;
+  }
+
+  std::cout << "Parsing is not implemented for --mech=" << mech << "!" << std::endl;
+  std::terminate();
+  return MPIMech::Yielding;  // unreachable
+}
+
 }

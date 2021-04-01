@@ -11,6 +11,8 @@
 
 #include <blas.hh>
 #include "dlaf/communication/communicator_grid.h"
+#include "dlaf/communication/mech.h"
+#include "dlaf/factorization/cholesky/api.h"
 #include "dlaf/factorization/cholesky/mc.h"
 #include "dlaf/matrix/matrix.h"
 #include "dlaf/types.h"
@@ -59,14 +61,15 @@ void cholesky(blas::Uplo uplo, Matrix<T, device>& mat_a) {
 /// @pre mat_a has a square block size,
 /// @pre mat_a is distributed according to grid.
 template <Backend backend, Device device, class T>
-void cholesky(comm::CommunicatorGrid grid, blas::Uplo uplo, Matrix<T, device>& mat_a) {
+void cholesky(comm::CommunicatorGrid grid, blas::Uplo uplo, Matrix<T, device>& mat_a,
+              comm::MPIMech mech = comm::MPIMech::Yielding) {
   DLAF_ASSERT(matrix::square_size(mat_a), mat_a);
   DLAF_ASSERT(matrix::square_blocksize(mat_a), mat_a);
   DLAF_ASSERT(matrix::equal_process_grid(mat_a, grid), mat_a, grid);
 
   // Method only for Lower triangular matrix
   if (uplo == blas::Uplo::Lower)
-    internal::Cholesky<backend, device, T>::call_L(grid, mat_a);
+    internal::Cholesky<backend, device, T>::call_L(grid, mat_a, mech);
   else
     DLAF_UNIMPLEMENTED(uplo);
 }
