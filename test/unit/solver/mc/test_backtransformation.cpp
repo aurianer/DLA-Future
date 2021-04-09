@@ -61,7 +61,8 @@ const std::vector<std::tuple<SizeType, SizeType, SizeType, SizeType>> sizes = {
 //  {2, 2, 3, 3}, {3, 4, 6, 7},  // m < mb
 //  {3, 3, 1, 1}, {4, 4, 2, 2}, {6, 3, 3, 3}, {12, 2, 4, 4}, {12, 24, 3, 3}, {24, 36, 6, 6},
 //  {5, 8, 3, 2}, {4, 6, 2, 3}, {5, 5, 2, 3}, {8, 27, 3, 4}, {15, 34, 4, 6},
-  {7, 10, 2, 3}
+  {3, 3, 1, 1}
+  //{8, 27, 3, 4}
 };
 
 template <class T>
@@ -96,8 +97,8 @@ void testBacktransformationEigenv(SizeType m, SizeType n, SizeType mb, SizeType 
 
   if (tottaus > 0) {
     // Copy matrices locally
-    auto mat_c_loc = dlaf::matrix::test::all_gather<T>(mat_c, comm_grid);
-    auto mat_v_loc = dlaf::matrix::test::all_gather<T>(mat_v, comm_grid);
+    auto mat_c_loc = dlaf::matrix::test::allGather<T>(mat_c, comm_grid);
+    auto mat_v_loc = dlaf::matrix::test::allGather<T>(mat_v, comm_grid);
 
     // Impose orthogonality: Q = I - v tau v^H is orthogonal (Q Q^H = I)
     // leads to tau = [1 + sqrt(1 - vH v taui^2)]/(vH v) for real
@@ -198,8 +199,8 @@ void testBacktransformationEigenv(comm::CommunicatorGrid grid, SizeType m, SizeT
 
   if (tottaus > 0) {
     // Copy matrices locally
-    auto mat_c_loc = dlaf::matrix::test::all_gather<T>(mat_c, grid);
-    auto mat_v_loc = dlaf::matrix::test::all_gather<T>(mat_v, grid);
+    auto mat_c_loc = dlaf::matrix::test::allGather<T>(mat_c, grid);
+    auto mat_v_loc = dlaf::matrix::test::allGather<T>(mat_v, grid);
 
     // Impose orthogonality: Q = I - v tau v^H is orthogonal (Q Q^H = I)
     // leads to tau = [1 + sqrt(1 - vH v taui^2)]/(vH v) for real
