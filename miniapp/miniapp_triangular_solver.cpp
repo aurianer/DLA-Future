@@ -92,11 +92,11 @@ int hpx_main(hpx::program_options::variables_map& vm) {
 #endif
 
   auto sync_barrier = [&]() {
-    a.syncAll();
-    b.syncAll();
+    a.waitLocalTiles();
+    b.waitLocalTiles();
 #if DLAF_WITH_CUDA
-    ah.syncAll();
-    bh.syncAll();
+    ah.waitLocalTiles();
+    bh.waitLocalTiles();
 #endif
     DLAF_MPI_CALL(MPI_Barrier(world));
   };
