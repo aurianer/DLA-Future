@@ -20,6 +20,17 @@
 
 using namespace dlaf;
 
+// Note:
+//
+// A bag:
+// - owns the temporary buffer (optionally allocated)
+// - contains a data descriptor to the contiguous data to be used for communication (being it the
+//    original tile or the temporary buffer)
+//
+// The bag can be create with the `makeItContiguous` helper function by passing the original tile
+// and in case of a RW tile, it is possible to `copyBack` the memory from the temporary buffer to
+// the original tile.
+
 template <class T>
 using Bag = hpx::tuple<
   common::Buffer<std::remove_const_t<T>>,
@@ -39,14 +50,20 @@ auto makeItContiguous(const matrix::Tile<T, Device::CPU>& tile) {
 DLAF_MAKE_CALLABLE_OBJECT(makeItContiguous);
 
 template <class T>
-auto copyBack(matrix::Tile<T, Device::CPU> const& tile, Bag<T> bag) {
+auto copyBack(matrix::Tile<T, Device::CPU> tile, Bag<T> bag) {
   auto buffer_used = std::move(hpx::get<0>(bag));
   if (buffer_used)
     common::copy(buffer_used, common::make_data(tile));
+  return std::move(tile);
 }
 
 DLAF_MAKE_CALLABLE_OBJECT(copyBack);
 
+// Note:
+//
+// A couple of kernels for MPI collectives which represents relevant use-cases
+// - reduceRecvInPlace
+// - reduceSend
 template <class T>
 auto reduceRecvInPlace(
     common::PromiseGuard<comm::Communicator> pcomm,
@@ -104,6 +121,13 @@ auto scheduleReduceRecvInPlace(
     MPI_Op reduce_op,
     hpx::future<matrix::Tile<T, Device::CPU>> tile) {
 
+  // Note:
+  // Create a bag with contiguous data, and extract both:
+  // - return value with the Bag
+  // - extract from passed parameters the future value of the original tile passed
+  //
+  // The latter one is based on unwrapExtendTiles, that extends the lifetime of the future<Tile>
+  // and allows to get back the ownership of the tile from the return tuple <ret_value, args>
   hpx::future<Bag<T>> bag;
   {
     auto wrapped_res = hpx::split_future(hpx::dataflow(
@@ -114,8 +138,13 @@ auto scheduleReduceRecvInPlace(
     tile = std::move(hpx::get<0>(args));
   }
 
-  // tile still keeps the original tile
-  // bag contains the info for communicating with the ireduce
+  // Note:
+  //
+  // At this point the bag is passed to the kernel, which in turns return the Bag giving back the
+  // ownership of the (optional) temporary buffer, extending its lifetime till the async operation
+  // is completed.
+  // If the temporary buffer has not been used, the tile is not kept alive since its lifetime is not
+  // extended, but it is kept alive by the next step...
   bag = hpx::dataflow(
       ex,
       hpx::util::unwrapping(reduceRecvInPlace_o),
@@ -123,12 +152,20 @@ auto scheduleReduceRecvInPlace(
       reduce_op,
       std::move(bag));
 
-  auto wrapped_res = hpx::split_future(hpx::dataflow(
-        matrix::unwrapExtendTiles(copyBack_o),
+  // Note:
+  //
+  // ... indeed the tile together with the future value of Bag after the async operation are "merged"
+  // with the dataflow, mathing the two lifetimes.
+  tile = hpx::dataflow(
+        hpx::util::unwrapping(copyBack_o),
         std::move(tile),
-        std::move(bag)));
-  tile = std::move(hpx::get<0>(wrapped_res));
+        std::move(bag));
 
+  // Note:
+  //
+  // The returned future<Tile> is a RW tile of the original operation after the MPI Async operation
+  // is fully completed (even if original tile is not used because it gets copied, it won't be
+  // released)
   return std::move(tile);
 }
 
@@ -140,15 +177,19 @@ auto scheduleReduceSend(
     MPI_Op reduce_op,
     hpx::shared_future<matrix::Tile<const T, Device::CPU>> tile) {
 
-  hpx::future<Bag<const T>> bag;
-  {
-    auto wrapped_res = hpx::split_future(hpx::dataflow(
-        matrix::unwrapExtendTiles(makeItContiguous_o),
-        tile));
-    bag = std::move(hpx::get<0>(wrapped_res));
-    auto args = hpx::split_future(std::move(hpx::get<1>(wrapped_res)));
-  }
+  // Note:
+  //
+  // Similarly to what has been done in `scheduleReduceRecvInPlace`, create a Bag
+  // with a temporary buffer if needed
+  //
+  // TODO shared_future<Tile> as assumption, it requires changes for future<Tile>
+  hpx::future<Bag<const T>> bag = hpx::dataflow(hpx::util::unwrapping(makeItContiguous_o), tile);
 
+  // Note:
+  //
+  // Since there is no other step after the kernel, the shared_future<Tile> has to be
+  // passed to the kernel so that its lifetime gets extended during the async operation
+  // execution
   hpx::dataflow(
       ex,
       hpx::util::unwrapping(reduceSend_o),
@@ -158,6 +199,10 @@ auto scheduleReduceSend(
       std::move(bag),
       tile);
 
+  // Note:
+  //
+  // The returned tile is exactly the original one, because the shared ownerhsip ensures that
+  // this tile won't be released before the MPI async operation is completed.
   return tile;
 }
 
