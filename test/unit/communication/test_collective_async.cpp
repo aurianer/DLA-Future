@@ -78,7 +78,7 @@ auto reduceSend(
     common::PromiseGuard<comm::Communicator> pcomm,
     MPI_Op reduce_op,
     Bag<const T> bag,
-    //matrix::Tile<const T, Device::CPU> const&,
+    matrix::Tile<const T, Device::CPU> const&,
     MPI_Request* req) {
   auto message = comm::make_message(hpx::get<1>(bag));
   auto& communicator = pcomm.ref();
@@ -155,8 +155,8 @@ auto scheduleReduceSend(
       rank_root,
       std::move(pcomm),
       reduce_op,
-      std::move(bag)/*,
-      tile*/);
+      std::move(bag),
+      tile);
 
   return tile;
 }
