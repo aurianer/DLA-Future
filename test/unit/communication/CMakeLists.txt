@@ -70,3 +70,10 @@ DLAF_addTest(test_comm_executor
   MPIRANKS 4
   USE_MAIN MPIHPX
 )
+
+DLAF_addTest(test_collective_async
+  SOURCES test_collective_async.cpp
+  LIBRARIES dlaf.core
+  MPIRANKS 2
+  USE_MAIN MPIHPX
+)
