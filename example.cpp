@@ -31,9 +31,10 @@ using Bag = hpx::tuple<
 template <class T>
 auto makeItContiguous(const matrix::Tile<T, D>& tile) {
   common::Buffer<std::remove_const_t<T>> buffer;
-  auto what_to_use = common::make_contiguous(
-      common::make_data(tile),
-      buffer);
+  auto tile_data = common::make_data(tile);
+  auto what_to_use = common::make_contiguous(tile_data, buffer);
+  if (buffer)
+    common::copy(tile_data, buffer);
   return Bag<T>(std::move(buffer), std::move(what_to_use));
 }
 
@@ -43,7 +44,7 @@ template <class T>
 auto copyBack(matrix::Tile<T, D> const& tile, Bag<T> bag) {
   auto buffer_used = std::move(hpx::get<0>(bag));
   if (buffer_used)
-    common::copy(common::make_data(tile), buffer_used);
+    common::copy(buffer_used, common::make_data(tile));
 }
 
 DLAF_MAKE_CALLABLE_OBJECT(copyBack);
@@ -163,7 +164,7 @@ int app(int argc, char** argv) {
 
   comm::CommunicatorGrid grid({MPI_COMM_WORLD}, 2, 2, common::Ordering::ColumnMajor);
 
-  matrix::Matrix<T, D> matrix({2, 2}, {1, 1}, grid);
+  matrix::Matrix<T, D> matrix({1, 2}, {1, 2});
   const LocalTileIndex index(0, 0);
 
   auto ex_mpi = getMPIExecutor<Backend::MC>();
