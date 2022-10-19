@@ -499,12 +499,12 @@ void trsm(cublasHandle_t handle, const blas::Side side, const blas::Uplo uplo, c
   using util::blasToCublasCast;
   auto s = getTrsmSizes(side, a, b);
   auto a_ptr =
-#ifdef DLAF_WITH_CUDA
+//#ifdef DLAF_WITH_CUDA
       blasToCublasCast(a.ptr());
-#elif defined(DLAF_WITH_HIP)
-      // The rocblas API requires a non-const argument
-      blasToCublasCast(const_cast<T*>(a.ptr()));
-#endif
+//#elif defined(DLAF_WITH_HIP)
+//      // The rocblas API requires a non-const argument
+//      blasToCublasCast(const_cast<T*>(a.ptr()));
+//#endif
   gpublas::internal::Trsm<T>::call(handle, blasToCublas(side), blasToCublas(uplo), blasToCublas(op),
                                    blasToCublas(diag), to_int(s.m), to_int(s.n),
                                    blasToCublasCast(&alpha), a_ptr, to_int(a.ld()),
