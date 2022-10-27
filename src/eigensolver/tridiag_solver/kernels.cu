@@ -20,11 +20,25 @@
 #include "dlaf/gpu/blas/api.h"
 #include "dlaf/gpu/lapack/api.h"
 #include "dlaf/gpu/lapack/error.h"
+
+#ifdef DLAF_WITH_HIP
+// Silence rocthrust internal warnings
+#pragma clang diagnostic push
+//#pragma clang diagnostic ignored "-Wgnu-zero-variadic-macro-arguments"
+#pragma clang diagnostic ignored "-Wgnu-anonymous-struct"
+#pragma clang diagnostic ignored "-Wgnu-zero-variadic-macro-arguments"
+#pragma clang diagnostic ignored "-Wnested-anon-types"
+#pragma clang diagnostic ignored "-Wsign-conversion"
+#pragma clang diagnostic ignored "-Wunused-result"
+#endif
 #include <thrust/count.h>
 #include <thrust/execution_policy.h>
 #include <thrust/extrema.h>
 #include <thrust/merge.h>
 #include <thrust/partition.h>
+#ifdef DLAF_WITH_HIP
+#pragma clang diagnostic pop
+#endif
 #include <pika/cuda.hpp>
 #include <whip.hpp>
 
@@ -435,12 +449,21 @@ void sumsqCols(const SizeType& k, const SizeType& row, const SizeType& col,
   // Note: the output of the reduction is saved in the first row.
   // TODO: use a segmented reduce sum with fancy iterators
   size_t temp_storage_bytes;
+#ifdef DLAF_WITH_CUDA
   whip::check_error(cub::DeviceReduce::Sum(NULL, temp_storage_bytes, &out[0], &out[0], nrows, stream));
+#elif defined(DLAF_WITH_HIP)
+  whip::check_error(cub::DeviceReduce::Sum(NULL, temp_storage_bytes, &out[0], &out[0], unrows, stream));
+#endif
   void* d_temp_storage = memory::internal::getUmpireDeviceAllocator().allocate(temp_storage_bytes);
 
   for (SizeType j = 0; j < ncols; ++j) {
+#ifdef DLAF_WITH_CUDA
     whip::check_error(cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, &out[j * ld],
                                              &out[j * ld], nrows, stream));
+#elif defined(DLAF_WITH_HIP)
+    whip::check_error(cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, &out[j * ld],
+                                             &out[j * ld], unrows, stream));
+#endif
   }
 
   // Deallocate memory

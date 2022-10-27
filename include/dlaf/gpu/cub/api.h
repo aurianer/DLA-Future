@@ -132,14 +132,15 @@ namespace cub {
     	    typename InputIteratorT,
     	    typename OutputIteratorT,
     	    typename ReduceOpT,
-    	    typename T
+    	    typename T,
+    	    typename NumItemsType
     	>
     	__host__ static
     	whip::error_t Reduce(void *d_temp_storage,
     	                  std::size_t &temp_storage_bytes,
     	                  InputIteratorT d_in,
     	                  OutputIteratorT d_out,
-    	                  int num_items,
+    	                  NumItemsType num_items,
     	                  ReduceOpT reduction_op,
     	                  T init,
     	                  whip::stream_t stream = 0,
@@ -154,14 +155,15 @@ namespace cub {
     	}
         template <
             typename InputIteratorT,
-            typename OutputIteratorT
+            typename OutputIteratorT,
+            typename NumItemsType
         >
         __host__ static
         whip::error_t Sum(void *d_temp_storage,
                        std::size_t &temp_storage_bytes,
                        InputIteratorT d_in,
                        OutputIteratorT d_out,
-                       int num_items,
+                       NumItemsType num_items,
                        whip::stream_t stream = 0,
                        bool debug_synchronous = false)
         {
@@ -182,14 +184,15 @@ namespace cub {
             typename OutputIteratorT,
             typename OffsetIteratorT,
             typename ReductionOp,
-            typename T
+            typename T,
+            typename NumSegmentType
         >
         __host__ static
         hipError_t Reduce(void * d_temp_storage,
                           std::size_t& temp_storage_bytes,
                           InputIteratorT d_in,
                           OutputIteratorT d_out,
-                          int num_segments,
+                          NumSegmentType num_segments,
                           OffsetIteratorT d_begin_offsets,
                           OffsetIteratorT d_end_offsets,
                           ReductionOp reduction_op,
