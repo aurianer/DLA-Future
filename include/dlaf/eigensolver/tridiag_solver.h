@@ -56,11 +56,7 @@ void tridiagSolver(Matrix<BaseType<T>, device>& tridiag, Matrix<BaseType<T>, dev
   DLAF_ASSERT(tridiag.distribution().size().rows() == evals.distribution().size().rows(),
               tridiag.distribution().size().rows(), evals.distribution().size().rows());
 
-#if defined(DLAF_WITH_HIP)
-  DLAF_UNIMPLEMENTED("Tridiagonal solver is not yet implemented for HIP");
-#else
   internal::TridiagSolver<backend, device, BaseType<T>>::call(tridiag, evals, evecs);
-#endif
 }
 
 }
