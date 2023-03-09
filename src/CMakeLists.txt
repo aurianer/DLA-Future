@@ -87,6 +87,7 @@ target_link_libraries(
     $<$<BOOL:${DLAF_WITH_HIP}>:roc::rocprim>
     $<$<LINK_LANGUAGE:HIP>:roc::rocthrust> # hip adds offload-arch globally for the CXX language in hip-config
     $<$<BOOL:${DLAF_WITH_GPU}>:whip::whip>
+    $<$<BOOL:${DLAF_WITH_STDEXEC}>:STDEXEC::stdexec>
 )
 target_compile_definitions(
   dlaf.prop
@@ -99,6 +100,7 @@ target_compile_definitions(
             $<$<BOOL:${DLAF_WITH_HIP}>:DLAF_WITH_HIP>
             $<$<BOOL:${DLAF_WITH_HIP}>:ROCM_MATHLIBS_API_USE_HIP_COMPLEX>
             $<$<BOOL:${DLAF_WITH_CUDA_MPI_RDMA}>:DLAF_WITH_CUDA_MPI_RDMA>
+            $<$<BOOL:${DLAF_WITH_STDEXEC}>:DLAF_WITH_STDEXEC>
 )
 
 # Precompiled headers

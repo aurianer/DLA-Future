@@ -40,6 +40,7 @@ option(DLAF_BUILD_MINIAPPS "Build miniapps" ON)
 option(DLAF_BUILD_TESTING "Build tests" ON)
 option(DLAF_BUILD_DOC "Build documentation" OFF)
 option(DLAF_WITH_PRECOMPILED_HEADERS "Use precompiled headers." OFF)
+option(DLAF_WITH_STDEXEC "Use of stdexec (p2300 reference implementation) over pika's implementation of p2300" OFF)
 
 # Add color to ninja output
 if(CMAKE_GENERATOR MATCHES "Ninja")
@@ -86,6 +87,9 @@ if(DLAF_WITH_GPU)
   find_package(whip REQUIRED)
 endif()
 
+if(DLAF_WITH_STDEXEC AND CMAKE_CXX_STANDARD LESS 20)
+    message(FATAL_ERROR "DLAF_WITH_STDEXEC requires at least C++20, CMAKE_CXX_STANDARD is currently ${CMAKE_CXX_STANDARD}")
+endif()
 # ---------------------------------------------------------------------------
 # Coverage
 # ---------------------------------------------------------------------------
@@ -124,6 +128,9 @@ if(DLAF_WITH_MKL)
   endif()
 else()
   find_package(LAPACK REQUIRED)
+endif()
+if (DLAF_WITH_STDEXEC)
+  find_package(STDEXEC REQUIRED)
 endif()
 
 # ----- pika
