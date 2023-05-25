@@ -9,9 +9,12 @@
 //
 #pragma once
 
+#include <functional>
 #include <pika/async_rw_mutex.hpp>
 #include <pika/execution.hpp>
 #include <pika/future.hpp>
+#include <type_traits>
+#include "dlaf/types.h"
 
 namespace dlaf::internal {
 template <typename...>
@@ -58,12 +61,22 @@ struct SenderSingleValueTypeImpl<
   using type = RType;
 };
 
+template <typename TList>
+struct value_types_helper
+{
+    using type = pika::util::detail::transform_t<TList, std::decay>;
+};
+
+template <typename... Ts>
+using decayed_typelist = TypeList<std::decay_t<Ts>...>;
+
 // The type sent by Sender, if Sender sends exactly one type.
 #if defined(PIKA_HAVE_STDEXEC)
+// TODO: make it unique if several types have a identical decayed type
 template <typename Sender>
-using SenderSingleValueType =
-    typename SenderSingleValueTypeImpl<pika::execution::experimental::value_types_of_t<
-        std::decay_t<Sender>, empty_env, TypeList, TypeList>>::type;
+using SenderSingleValueType = typename SenderSingleValueTypeImpl<
+        pika::execution::experimental::value_types_of_t<
+            std::decay_t<Sender>, empty_env, decayed_typelist, decayed_typelist>>::type;
 #else
 template <typename Sender>
 using SenderSingleValueType =
@@ -78,6 +91,7 @@ using SenderElementType = typename SenderSingleValueType<Sender>::ElementType;
 
 // The value of an embedded device in the value_types of Sender, if it
 // exists and Sender sends exactly one type.
+// TODO: decay sendersinglevaluetype, elementtype?
 template <typename Sender>
 inline constexpr Device sender_device = SenderSingleValueType<Sender>::device;
 
