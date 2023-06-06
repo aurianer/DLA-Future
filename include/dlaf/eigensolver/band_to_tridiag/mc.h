@@ -11,6 +11,7 @@
 #pragma once
 
 #include "dlaf/eigensolver/band_to_tridiag/api.h"
+#include "dlaf/matrix/tile.h"
 
 #include <pika/future.hpp>
 
@@ -1393,8 +1394,9 @@ TridiagResult<T, Device::CPU> BandToTridiag<Backend::MC, D, T>::call_L(
                 ex::start_detached(
                     comm::scheduleRecv(ex::make_unique_any_sender(comm), rank_panel,
                                        compute_v_tag(index_v.row(), bottom),
-                                       ex::make_unique_any_sender(
+                                       matrix::ReadWriteTileSender<T, D>(
                                            ex::when_all(std::move(tile_v), std::move(dep)))));
+
               }
             };
 
