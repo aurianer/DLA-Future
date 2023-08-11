@@ -43,7 +43,7 @@ enum class TransformDispatchType { Plain, Blas, Lapack };
 // allows choosing the priority.
 //
 // At its core, transform is a convenience wrapper around
-// sender | transfer(with_priority(scheduler, priority)) | then(unwrapping(f)).
+// sender | transfer(with_priority(scheduler, priority)) | then(consume_rvalues(unwrapping(f))).
 
 /// Lazy transform. This does not submit the work and returns a sender.
 template <TransformDispatchType Tag = TransformDispatchType::Plain, Backend B = Backend::MC,
@@ -56,8 +56,11 @@ template <TransformDispatchType Tag = TransformDispatchType::Plain, Backend B = 
   auto scheduler = getBackendScheduler<B>(policy.priority());
   auto transfer_sender = transfer(std::forward<Sender>(sender), std::move(scheduler));
 
+  using dlaf::common::internal::Unwrapping;
+  using dlaf::common::internal::consume_rvalues;
+
   if constexpr (B == Backend::MC) {
-    return then(std::move(transfer_sender), dlaf::common::internal::Unwrapping{std::forward<F>(f)});
+    return then(std::move(transfer_sender), consume_rvalues{Unwrapping{std::forward<F>(f)}});
   }
   else if constexpr (B == Backend::GPU) {
 #if defined(DLAF_WITH_GPU)
@@ -67,16 +70,16 @@ template <TransformDispatchType Tag = TransformDispatchType::Plain, Backend B = 
 
     if constexpr (Tag == TransformDispatchType::Plain) {
       return then_with_stream(std::move(transfer_sender),
-                              dlaf::common::internal::Unwrapping{std::forward<F>(f)});
+                              consume_rvalues{Unwrapping{std::forward<F>(f)}});
     }
     else if constexpr (Tag == TransformDispatchType::Blas) {
       return then_with_cublas(std::move(transfer_sender),
-                              dlaf::common::internal::Unwrapping{std::forward<F>(f)},
+                              consume_rvalues{Unwrapping{std::forward<F>(f)}},
                               CUBLAS_POINTER_MODE_HOST);
     }
     else if constexpr (Tag == TransformDispatchType::Lapack) {
       return then_with_cusolver(std::move(transfer_sender),
-                                dlaf::common::internal::Unwrapping{std::forward<F>(f)});
+                              consume_rvalues{Unwrapping{std::forward<F>(f)}});
     }
     else {
       DLAF_STATIC_FAIL(
