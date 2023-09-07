@@ -18,14 +18,10 @@
 namespace dlaf::common::internal {
 
 template <typename T>
-T consume_rvalue(T&& x) {
-  return std::move(x);
-}
+void consume_rvalue(T&& x) { [[maybe_unused]] auto x_local = std::move(x); }
 
 template <typename T>
-T& consume_rvalue(T& x) {
-  return x;
-}
+void consume_rvalue(T& x) {}
 
 /// ConsumeRvalues is a callable object wrapper that consumes rvalues passed as arguments
 /// after calling the wrapped callable.
@@ -34,13 +30,31 @@ struct ConsumeRvalues {
   std::decay_t<F> f;
 
   template <typename... Ts>
-  auto operator()(Ts&&... ts) && -> decltype(std::move(f)(consume_rvalue(std::forward<Ts>(ts))...)) {
-    return std::move(f)(consume_rvalue(std::forward<Ts>(ts))...);
+  auto operator()(Ts&&... ts) && -> decltype(std::move(f)(std::forward<Ts>(ts))...) {
+    using result_type = decltype(std::move(f)(std::forward<Ts>(ts)...));
+    if constexpr (std::is_void_v<result_type>) {
+      std::move(f)(std::forward<Ts>(ts)...);
+      (consume_rvalues(std::forward<Ts>(ts))...);
+    }
+    else {
+      auto ret = std::move(f)(std::forward<Ts>(ts)...);
+      (consume_rvalues(std::forward<Ts>(ts))...);
+      return ret;
+    }
   }
 
   template <typename... Ts>
-  auto operator()(Ts&&... ts) & -> decltype(f(consume_rvalue(std::forward<Ts>(ts))...)) {
-    return f(consume_rvalue(std::forward<Ts>(ts))...);
+  auto operator()(Ts&&... ts) & -> decltype(f(std::forward<Ts>(ts))...) {
+    using result_type = decltype(f(std::forward<Ts>(ts)...));
+    if constexpr (std::is_void_v<result_type>) {
+      f(std::forward<Ts>(ts)...);
+      (consume_rvalues(std::forward<Ts>(ts))...);
+    }
+    else {
+      auto ret = f(std::forward<Ts>(ts)...);
+      (consume_rvalues(std::forward<Ts>(ts))...);
+      return ret;
+    }
   }
 };
 
