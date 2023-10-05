@@ -148,10 +148,22 @@ public:
   }
 };
 
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+//#pragma GCC diagnostic warning "-Wno-psabi"
+#pragma GCC diagnostic ignored "-Wpsabi"
+//#pragma GCC diagnostic ignored "-Wabi-tag"
+//#pragma GCC diagnostic ignored "-Wabi-tag"
+//#pragma GCC diagnostic ignored "-Wabi=2"
+//#pragma GCC diagnostic warning "-Wabi=2"
+#endif
 template <TransformDispatchType Tag, Backend B, typename F>
 auto makePartialTransform(const Policy<B> policy, F&& f) {
   return PartialTransform<Tag, B, std::decay_t<F>>{policy, std::forward<F>(f)};
 }
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 /// A partially applied transformDetach, with the policy and callable object
 /// given, but the predecessor sender missing. The predecessor sender is applied
