@@ -21,10 +21,10 @@ macro(target_add_warnings target_name)
     ${target_name}
     PRIVATE -Wall
             -Wextra
-            $<$<COMPILE_LANGUAGE:CXX>:-Wnon-virtual-dtor>
+            $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<NOT:$<CXX_COMPILER_ID:NVHPC>>>:-Wnon-virtual-dtor>
             -Wunused
-            -Wunused-local-typedefs
-            $<$<COMPILE_LANGUAGE:CXX>:-Woverloaded-virtual>
+            $<$<NOT:$<CXX_COMPILER_ID:NVHPC>>:-Wunused-local-typedefs>
+            $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<NOT:$<CXX_COMPILER_ID:NVHPC>>>:-Woverloaded-virtual>
             -Wdangling-else
             -Wswitch-enum
             # Conversions
