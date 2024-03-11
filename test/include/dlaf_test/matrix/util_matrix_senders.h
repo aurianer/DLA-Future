@@ -157,7 +157,7 @@ void checkSenders(bool get_ready, const std::vector<EagerVoidSender>& current,
 
 #define CHECK_MATRIX_SENDERS(get_ready, current, previous)            \
   do {                                                                \
-    SCOPED_TRACE("");                                                 \
+    [[maybe_unused]] SCOPED_TRACE("");                                                 \
     ::dlaf::matrix::test::checkSenders(get_ready, current, previous); \
   } while (0)
 }

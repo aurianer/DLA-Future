@@ -64,7 +64,7 @@ matrix::Tile<T, Device::CPU> setupVWellFormed(const SizeType b,
   using lapack::lacpy;
   using lapack::laset;
 
-  common::internal::SingleThreadedBlasScope single;
+  [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
 
   // Note: the size of of tile_hh and tile_v embeds a relevant information about the number of
   // reflecotrs and their max size. This will be exploited to correctly setup the well formed
@@ -104,7 +104,7 @@ void computeTFactor(const matrix::Tile<const T, Device::CPU>& tile_taus,
                     const matrix::Tile<T, Device::CPU>& tile_t) {
   using namespace lapack;
 
-  common::internal::SingleThreadedBlasScope single;
+  [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
 
   // taus have to be extracted from the compact form (i.e. first row of the input tile)
   std::vector<T> taus;
@@ -185,7 +185,7 @@ struct ApplyHHToSingleTileRow<Backend::MC, T> {
     using namespace blas;
     using tile::internal::gemm;
 
-    common::internal::SingleThreadedBlasScope single;
+    [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
 
     for (SizeType j = (util::ceilDiv(tile_v.size().cols(), hhr_nb) - 1) * hhr_nb; j >= 0; j -= hhr_nb) {
       const SizeType jb = std::min(hhr_nb, tile_v.size().cols() - j);
@@ -211,7 +211,7 @@ struct ApplyHHToSingleTileRow<Backend::GPU, T> {
     using namespace blas;
     using tile::internal::gemm;
 
-    common::internal::SingleThreadedBlasScope single;
+    [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
 
     for (SizeType j = (util::ceilDiv(tile_v.size().cols(), hhr_nb) - 1) * hhr_nb; j >= 0; j -= hhr_nb) {
       const SizeType jb = std::min(hhr_nb, tile_v.size().cols() - j);
@@ -271,7 +271,7 @@ struct ApplyHHToDoubleTileRow<Backend::MC, T> {
     using namespace blas;
     using tile::internal::gemm;
 
-    common::internal::SingleThreadedBlasScope single;
+    [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
 
     for (SizeType j = (util::ceilDiv(tile_v.size().cols(), hhr_nb) - 1) * hhr_nb; j >= 0; j -= hhr_nb) {
       const SizeType jb = std::min(hhr_nb, tile_v.size().cols() - j);
@@ -301,7 +301,7 @@ struct ApplyHHToDoubleTileRow<Backend::GPU, T> {
     using namespace blas;
     using tile::internal::gemm;
 
-    common::internal::SingleThreadedBlasScope single;
+    [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
 
     for (SizeType j = (util::ceilDiv(tile_v.size().cols(), hhr_nb) - 1) * hhr_nb; j >= 0; j -= hhr_nb) {
       const SizeType jb = std::min(hhr_nb, tile_v.size().cols() - j);

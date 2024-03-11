@@ -38,7 +38,7 @@ using namespace dlaf::matrix::test;
 using namespace dlaf::test;
 using namespace testing;
 
-::testing::Environment* const comm_grids_env =
+[[maybe_unused]] ::testing::Environment* const comm_grids_env =
     ::testing::AddGlobalTestEnvironment(new CommunicatorGrid6RanksEnvironment);
 
 template <typename Type>

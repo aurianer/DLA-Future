@@ -32,7 +32,7 @@ using namespace testing;
 
 using pika::this_thread::experimental::sync_wait;
 
-::testing::Environment* const comm_grids_env =
+[[maybe_unused]] ::testing::Environment* const comm_grids_env =
     ::testing::AddGlobalTestEnvironment(new CommunicatorGrid6RanksEnvironment);
 
 template <typename Type>

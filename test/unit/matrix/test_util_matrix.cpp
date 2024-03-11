@@ -35,7 +35,7 @@ using pika::execution::thread_priority;
 using pika::execution::experimental::start_detached;
 using pika::this_thread::experimental::sync_wait;
 
-::testing::Environment* const comm_grids_env =
+[[maybe_unused]] ::testing::Environment* const comm_grids_env =
     ::testing::AddGlobalTestEnvironment(new CommunicatorGrid6RanksEnvironment);
 
 template <class T>

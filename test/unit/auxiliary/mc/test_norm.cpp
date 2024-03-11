@@ -34,7 +34,7 @@ using namespace testing;
 template <class T>
 using NormT = dlaf::BaseType<T>;
 
-::testing::Environment* const comm_grids_env =
+[[maybe_unused]] ::testing::Environment* const comm_grids_env =
     ::testing::AddGlobalTestEnvironment(new CommunicatorGrid6RanksEnvironment);
 
 template <typename Type>
@@ -42,8 +42,8 @@ struct NormDistributedTest : public TestWithCommGrids {};
 
 TYPED_TEST_SUITE(NormDistributedTest, MatrixElementTypes);
 
-const std::vector<lapack::Norm> lapack_norms({lapack::Norm::Fro, lapack::Norm::Inf, lapack::Norm::Max,
-                                              lapack::Norm::One, lapack::Norm::Two});
+[[maybe_unused]] const std::vector<lapack::Norm> lapack_norms({lapack::Norm::Fro,
+        lapack::Norm::Inf, lapack::Norm::Max, lapack::Norm::One, lapack::Norm::Two});
 const std::vector<blas::Uplo> blas_uplos({blas::Uplo::Lower, blas::Uplo::Upper, blas::Uplo::General});
 
 TYPED_TEST(NormDistributedTest, MaxNorm_EmptyMatrix) {
@@ -101,7 +101,7 @@ void set_and_test(CommunicatorGrid& comm_grid, comm::Index2D rank, Matrix<T, Dev
   ASSERT_EQ(lapack::Norm::Max, norm_type);
   const NormT<T> norm = auxiliary::max_norm<Backend::MC>(comm_grid, rank, uplo, matrix);
 
-  SCOPED_TRACE(::testing::Message() << "norm=" << norm_type << " uplo=" << uplo << " changed element="
+  [[maybe_unused]] SCOPED_TRACE(::testing::Message() << "norm=" << norm_type << " uplo=" << uplo << " changed element="
                                     << index << " in matrix size=" << matrix.size()
                                     << " grid_size=" << comm_grid.size() << " rank=" << rank);
 

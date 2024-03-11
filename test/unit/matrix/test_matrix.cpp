@@ -45,7 +45,7 @@ using namespace testing;
 namespace ex = pika::execution::experimental;
 namespace tt = pika::this_thread::experimental;
 
-::testing::Environment* const comm_grids_env =
+[[maybe_unused]] ::testing::Environment* const comm_grids_env =
     ::testing::AddGlobalTestEnvironment(new CommunicatorGrid6RanksEnvironment);
 
 template <typename Type>
@@ -355,7 +355,7 @@ void checkLayoutLocal(T* p, const LayoutInfo& layout, Mat& matrix) {
   do {                                                          \
     std::stringstream s;                                        \
     s << "Rank " << distribution.rankIndex();                   \
-    SCOPED_TRACE(s.str());                                      \
+    [[maybe_unused]] SCOPED_TRACE(s.str());                                      \
     checkDistributionLayout(p, distribution, layout, mat);      \
   } while (0)
 

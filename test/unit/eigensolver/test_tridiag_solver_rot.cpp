@@ -33,7 +33,7 @@ using namespace dlaf::test;
 namespace ex = pika::execution::experimental;
 namespace di = dlaf::eigensolver::internal;
 
-::testing::Environment* const comm_grids_env =
+[[maybe_unused]] ::testing::Environment* const comm_grids_env =
     ::testing::AddGlobalTestEnvironment(new CommunicatorGrid6RanksEnvironment);
 
 template <typename T>
@@ -111,7 +111,7 @@ void testApplyGivenRotations(comm::CommunicatorGrid& grid, const SizeType m, con
   const GlobalElementSize offset(idx_begin * mb, idx_begin * mb);
 
   {
-    dlaf::common::internal::SingleThreadedBlasScope single;
+    [[maybe_unused]] dlaf::common::internal::SingleThreadedBlasScope single;
 
     for (auto rot : rots) {
       T* x = mat_loc.ptr(GlobalElementIndex{0, rot.i} + offset);

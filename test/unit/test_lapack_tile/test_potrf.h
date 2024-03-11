@@ -49,7 +49,7 @@ void testPotrf(const blas::Uplo uplo, const SizeType n, const SizeType extra_lda
   std::stringstream s;
   s << "POTRF: " << uplo;
   s << ", n = " << n << ", lda = " << lda;
-  SCOPED_TRACE(s.str());
+  [[maybe_unused]] SCOPED_TRACE(s.str());
 
   // Check result against analytical result.
   CHECK_TILE_NEAR(res_a, a, 4 * (n + 1) * TypeUtilities<T>::error,
@@ -71,7 +71,7 @@ void testPotrfNonPosDef(const blas::Uplo uplo, SizeType n, SizeType extra_lda) {
   std::stringstream s;
   s << "POTRF Non Positive Definite: " << uplo;
   s << ", n = " << n << ", lda = " << lda;
-  SCOPED_TRACE(s.str());
+  [[maybe_unused]] SCOPED_TRACE(s.str());
 
   EXPECT_EQ(1, info);
 }

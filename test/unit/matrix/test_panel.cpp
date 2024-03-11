@@ -44,7 +44,7 @@ using pika::execution::experimental::start_detached;
 using pika::execution::experimental::then;
 using pika::this_thread::experimental::sync_wait;
 
-::testing::Environment* const comm_grids_env =
+[[maybe_unused]] ::testing::Environment* const comm_grids_env =
     ::testing::AddGlobalTestEnvironment(new CommunicatorGrid6RanksEnvironment);
 
 template <typename Type>
@@ -468,7 +468,7 @@ void testShrink(const GlobalElementSize size, const TileElementSize blocksize,
       if constexpr (StoreTransposed::Yes == Storage)
         tile_size.transpose();
 
-      SCOPED_TRACE(message);
+      [[maybe_unused]] SCOPED_TRACE(message);
       EXPECT_EQ(tile_size, panel_tile.size());
     }
 
@@ -485,7 +485,7 @@ void testShrink(const GlobalElementSize size, const TileElementSize blocksize,
       if constexpr (StoreTransposed::Yes == Storage)
         tile_size.transpose();
 
-      SCOPED_TRACE(message);
+      [[maybe_unused]] SCOPED_TRACE(message);
       EXPECT_EQ(tile_size, panel_tile.size());
 
       CHECK_TILE_EQ(fixedValueTile(counter++), panel_tile);

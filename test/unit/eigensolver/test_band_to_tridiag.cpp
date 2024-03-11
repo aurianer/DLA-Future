@@ -40,7 +40,7 @@ using namespace dlaf::test;
 using namespace testing;
 using pika::this_thread::experimental::sync_wait;
 
-::testing::Environment* const comm_grids_env =
+[[maybe_unused]] ::testing::Environment* const comm_grids_env =
     ::testing::AddGlobalTestEnvironment(new CommunicatorGrid6RanksEnvironment);
 
 template <class T>
@@ -78,7 +78,7 @@ void testBandToTridiagOutputCorrectness(const blas::Uplo uplo, const SizeType ba
   auto mat_v_local = matrix::test::allGather(blas::Uplo::General, mat_v, grid...);
 
   auto apply_left_right = [&mat_local, m, ld](SizeType size_hhr, T* v, SizeType first_index) {
-    dlaf::common::internal::SingleThreadedBlasScope single;
+    [[maybe_unused]] dlaf::common::internal::SingleThreadedBlasScope single;
 
     T tau = v[0];
     v[0] = T{1};
@@ -161,7 +161,7 @@ void testBandToTridiag(CommunicatorGrid& grid, blas::Uplo uplo, const SizeType b
   mat_a_h.waitLocalTiles();
   mat_trid.waitLocalTiles();
   mat_v.waitLocalTiles();
-  SCOPED_TRACE(::testing::Message() << "size " << m << ", block " << mb << ", band " << band_size
+  [[maybe_unused]] SCOPED_TRACE(::testing::Message() << "size " << m << ", block " << mb << ", band " << band_size
                                     << ", grid " << grid.size());
 
   testBandToTridiagOutputCorrectness(uplo, band_size, m, mb, mat_a_h, mat_trid, mat_v, grid);

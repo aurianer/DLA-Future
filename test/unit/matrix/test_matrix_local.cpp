@@ -167,7 +167,7 @@ TYPED_TEST(MatrixLocalTest, OutputNumpyFormat) {
   EXPECT_EQ(test_config.second, stream_matrix_output.str());
 }
 
-::testing::Environment* const comm_grids_env =
+[[maybe_unused]] ::testing::Environment* const comm_grids_env =
     ::testing::AddGlobalTestEnvironment(new CommunicatorGrid6RanksEnvironment);
 
 template <typename Type>

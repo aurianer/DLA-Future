@@ -98,7 +98,7 @@ void testReduceInPlace(comm::Communicator world, matrix::Matrix<T, D> matrix, st
     exp_tile = new_tile;
   }
   auto tile = tt::sync_wait(matrix.read(idx));
-  SCOPED_TRACE(test_name);
+  [[maybe_unused]] SCOPED_TRACE(test_name);
 
   CHECK_TILE_EQ(exp_tile, tile.get());
 }
@@ -130,7 +130,7 @@ void testAllReduceInPlace(comm::Communicator world, matrix::Matrix<T, D> matrix,
   auto exp_tile = fixedValueTile(world.size() * (world.size() + 1) / 2);
   {
     auto tile = tt::sync_wait(std::move(after));
-    SCOPED_TRACE(test_name);
+    [[maybe_unused]] SCOPED_TRACE(test_name);
 
     CHECK_TILE_EQ(exp_tile, tile);
   }
@@ -163,7 +163,7 @@ void testAllReduce(comm::Communicator world, matrix::Matrix<T, D> matA, matrix::
 
   auto tile_in = tt::sync_wait(mat_in.read(idx));
   auto tile_out = tt::sync_wait(mat_out.read(idx));
-  SCOPED_TRACE(test_name);
+  [[maybe_unused]] SCOPED_TRACE(test_name);
 
   CHECK_TILE_EQ(input_tile, tile_in.get());
 

@@ -34,7 +34,7 @@ using namespace testing;
 namespace ex = pika::execution::experimental;
 namespace tt = pika::this_thread::experimental;
 
-::testing::Environment* const comm_grids_env =
+[[maybe_unused]] ::testing::Environment* const comm_grids_env =
     ::testing::AddGlobalTestEnvironment(new CommunicatorGrid6RanksEnvironment);
 
 template <typename Type>

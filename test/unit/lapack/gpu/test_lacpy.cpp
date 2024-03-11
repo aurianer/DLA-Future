@@ -59,7 +59,7 @@ TYPED_TEST(LacpyTestGPU, CorrectnessLocal) {
       return T(ij.row() - ij.col());
   };
 
-  dlaf::common::internal::SingleThreadedBlasScope single;
+  [[maybe_unused]] dlaf::common::internal::SingleThreadedBlasScope single;
 
   for (const auto& [m, n, lda, ldb] : configs) {
     for (const auto uplo : {Uplo::Lower, Uplo::Upper, Uplo::General}) {
@@ -77,7 +77,7 @@ TYPED_TEST(LacpyTestGPU, CorrectnessLocal) {
       whip::stream_synchronize(stream);
 
       // Verify
-      SCOPED_TRACE(::testing::Message() << "Comparison test m=" << m << " n=" << n << " lda=" << lda
+      [[maybe_unused]] SCOPED_TRACE(::testing::Message() << "Comparison test m=" << m << " n=" << n << " lda=" << lda
                                         << " ldb=" << ldb << " uplo=" << uplo);
 
       const auto error = TypeUtilities<T>::error;
