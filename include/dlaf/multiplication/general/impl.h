@@ -239,7 +239,7 @@ void GeneralSub<B, D, T>::callNN(comm::CommunicatorPipeline<comm::CommunicatorTy
       for (SizeType i = i_beg; i < i_end; ++i) {
         const LocalTileIndex ik(i, k_local);
         const bool isRowPartial = (i == i_end - 1 && isEndRangePartial && rankHasLastRow);
-        const SizeType nrows = isRowPartial ? partialSize : mb;
+        [[maybe_unused]] const SizeType nrows = isRowPartial ? partialSize : mb;
         panelA.setTile(ik, (isRowPartial || isKPartial)
                                ? splitTile(mat_a.read(ik), {{0, 0}, {nrows, kSize}})
                                : mat_a.read(ik));
@@ -251,7 +251,7 @@ void GeneralSub<B, D, T>::callNN(comm::CommunicatorPipeline<comm::CommunicatorTy
       for (SizeType j = j_beg; j < j_end; ++j) {
         const LocalTileIndex kj(k_local, j);
         const bool isColPartial = (j == j_end - 1 && isEndRangePartial && rankHasLastCol);
-        const SizeType ncols = isColPartial ? partialSize : mb;
+        [[maybe_unused]] const SizeType ncols = isColPartial ? partialSize : mb;
         panelB.setTile(kj, (isKPartial || isColPartial)
                                ? splitTile(mat_b.read(kj), {{0, 0}, {kSize, ncols}})
                                : mat_b.read(kj));
@@ -267,13 +267,13 @@ void GeneralSub<B, D, T>::callNN(comm::CommunicatorPipeline<comm::CommunicatorTy
     // Everything needed for the update is available locally thanks to previous broadcasts.
     for (SizeType i = i_beg; i < i_end; ++i) {
       const bool isRowPartial = (i == i_end - 1 && isEndRangePartial && rankHasLastRow);
-      const SizeType nrows = isRowPartial ? partialSize : mb;
+      [[maybe_unused]] const SizeType nrows = isRowPartial ? partialSize : mb;
 
       for (SizeType j = j_beg; j < j_end; ++j) {
         const LocalTileIndex ij(i, j);
 
         const bool isColPartial = (j == j_end - 1 && isEndRangePartial && rankHasLastCol);
-        const SizeType ncols = isColPartial ? partialSize : mb;
+        [[maybe_unused]] const SizeType ncols = isColPartial ? partialSize : mb;
 
         ex::start_detached(
             dlaf::internal::whenAllLift(blas::Op::NoTrans, blas::Op::NoTrans, alpha, panelA.read(ij),

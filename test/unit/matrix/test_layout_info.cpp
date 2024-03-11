@@ -30,7 +30,7 @@ const std::vector<std::tuple<LocalElementSize, TileElementSize, SizeType, SizeTy
             {{29, 41}, {13, 11}, 13, 143, 419, 1637},  // compressed col_offset
             {{0, 0}, {1, 1}, 1, 1, 1, 0}});
 
-const std::vector<std::tuple<LocalElementSize, TileElementSize, SizeType, SizeType, SizeType>> wrong_values(
+[[maybe_unused]] const std::vector<std::tuple<LocalElementSize, TileElementSize, SizeType, SizeType, SizeType>> wrong_values(
     {
         {{31, 17}, {7, 11}, 30, 7, 341},     // ld, row_offset combo is wrong
         {{31, 17}, {32, 11}, 30, 7, 341},    // ld is wrong

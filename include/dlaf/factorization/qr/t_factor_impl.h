@@ -66,7 +66,7 @@ struct Helpers<Backend::MC, Device::CPU, T> {
       DLAF_ASSERT(tile_v.size().cols() == k, tile_v.size().cols(), k);
       DLAF_ASSERT(taus.size().rows() == k, taus.size().rows(), k);
 
-      common::internal::SingleThreadedBlasScope single;
+      [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
       for (SizeType j = 0; j < k; ++j) {
         const T tau = taus({j, 0});
 
@@ -108,7 +108,7 @@ struct Helpers<Backend::MC, Device::CPU, T> {
     // Update each column (in order) t = T . t
     // remember that T is upper triangular, so it is possible to use TRMV
     auto trmv_func = [](matrix::Tile<T, Device::CPU>&& tile_t) {
-      common::internal::SingleThreadedBlasScope single;
+      [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
       for (SizeType j = 0; j < tile_t.size().cols(); ++j) {
         const TileElementIndex t_start{0, j};
         const TileElementSize t_size{j, 1};

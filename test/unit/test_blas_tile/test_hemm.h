@@ -62,7 +62,7 @@ void testHemm(const blas::Side side, const blas::Uplo uplo, const SizeType m, co
   s << "HEMM: " << side << ", " << uplo;
   s << ", m = " << m << ", n = " << n;
   s << ", lda = " << lda << ", ldb = " << ldb << ", ldc = " << ldc;
-  SCOPED_TRACE(s.str());
+  [[maybe_unused]] SCOPED_TRACE(s.str());
 
   // Check result against analytical result.
   CHECK_TILE_NEAR(res_c, c, 2 * (k + 1) * TypeUtilities<T>::error,

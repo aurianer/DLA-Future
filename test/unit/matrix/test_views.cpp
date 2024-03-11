@@ -31,7 +31,7 @@ using matrix::SubPanelView;
 
 using matrix::Distribution;
 
-::testing::Environment* const comm_grids_env =
+[[maybe_unused]] ::testing::Environment* const comm_grids_env =
     ::testing::AddGlobalTestEnvironment(new CommunicatorGrid6RanksEnvironment);
 
 GlobalElementSize globalSize(const LocalElementSize& size) {

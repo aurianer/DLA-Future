@@ -55,7 +55,7 @@ void testTrsm(const blas::Side side, const blas::Uplo uplo, const blas::Op op, c
   std::stringstream s;
   s << "TRSM: " << side << ", " << uplo << ", " << op << ", " << diag << ", m = " << m << ", n = " << n
     << ", lda = " << lda << ", ldb = " << ldb;
-  SCOPED_TRACE(s.str());
+  [[maybe_unused]] SCOPED_TRACE(s.str());
 
   CHECK_TILE_NEAR(res_b, b, 10 * (m + 1) * TypeUtilities<T>::error,
                   10 * (m + 1) * TypeUtilities<T>::error);

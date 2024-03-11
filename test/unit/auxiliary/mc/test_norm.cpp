@@ -99,7 +99,7 @@ void set_and_test(CommunicatorGrid& comm_grid, comm::Index2D rank, Matrix<T, Dev
   ASSERT_EQ(lapack::Norm::Max, norm_type);
   const NormT<T> norm = auxiliary::max_norm<Backend::MC>(comm_grid, rank, uplo, matrix);
 
-  SCOPED_TRACE(::testing::Message() << "norm=" << norm_type << " uplo=" << uplo << " changed element="
+  [[maybe_unused]] SCOPED_TRACE(::testing::Message() << "norm=" << norm_type << " uplo=" << uplo << " changed element="
                                     << index << " in matrix size=" << matrix.size()
                                     << " grid_size=" << comm_grid.size() << " rank=" << rank);
 

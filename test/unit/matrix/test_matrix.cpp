@@ -352,7 +352,7 @@ void checkLayoutLocal(T* p, const LayoutInfo& layout, Mat& matrix) {
   do {                                                          \
     std::stringstream s;                                        \
     s << "Rank " << distribution.rankIndex();                   \
-    SCOPED_TRACE(s.str());                                      \
+    [[maybe_unused]] SCOPED_TRACE(s.str());                                      \
     checkDistributionLayout(p, distribution, layout, mat);      \
   } while (0)
 

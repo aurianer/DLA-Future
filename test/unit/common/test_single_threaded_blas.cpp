@@ -31,7 +31,7 @@ TEST(SingleThreadedBlas, MKL) {
   bool mkl_set_num_threads_applied = mkl_get_max_threads() == 2;
 
   {
-    dlaf::common::internal::SingleThreadedBlasScope single;
+    [[maybe_unused]] dlaf::common::internal::SingleThreadedBlasScope single;
     EXPECT_EQ(mkl_get_max_threads(), 1);
   }
 
@@ -50,7 +50,7 @@ TEST(SingleThreadedBlas, OpenMP) {
   omp_set_num_threads(num_threads);
 
   {
-    dlaf::common::internal::SingleThreadedBlasScope single;
+    [[maybe_unused]] dlaf::common::internal::SingleThreadedBlasScope single;
     EXPECT_EQ(omp_get_max_threads(), 1);
   }
 

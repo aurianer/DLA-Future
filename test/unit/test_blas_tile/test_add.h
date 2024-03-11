@@ -53,7 +53,7 @@ void testAdd(const SizeType m, const SizeType n, const SizeType extra_lda, const
   s << "Add: ";
   s << ", m = " << m << ", n = " << n;
   s << ", lda = " << lda << ", ldb = " << ldb;
-  SCOPED_TRACE(s.str());
+  [[maybe_unused]] SCOPED_TRACE(s.str());
 
   CHECK_TILE_NEAR(res_a, a, 2 * TypeUtilities<T>::error, 2 * TypeUtilities<T>::error);
 }

@@ -82,7 +82,7 @@ TEST_F(TransformMPITest, PromiseGuardManagement) {
     // up creating a deadlock. The assumption is that try_waiting_guard timeout is enough for
     // transformMPI to post the IRecv.
     std::atomic_bool pg_guard = false;
-    auto after_pg = chain.exclusive() | ex::then([&pg_guard](auto&& pg) {
+    [[maybe_unused]] auto after_pg = chain.exclusive() | ex::then([&pg_guard](auto&& pg) {
                       pg_guard = true;
                       return std::move(pg);
                     }) |

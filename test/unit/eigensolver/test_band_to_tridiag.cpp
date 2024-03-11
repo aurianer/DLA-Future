@@ -159,7 +159,7 @@ void testBandToTridiag(CommunicatorGrid& grid, blas::Uplo uplo, const SizeType b
   mat_a_h.waitLocalTiles();
   mat_trid.waitLocalTiles();
   mat_v.waitLocalTiles();
-  SCOPED_TRACE(::testing::Message() << "size " << m << ", block " << mb << ", band " << band_size
+  [[maybe_unused]] SCOPED_TRACE(::testing::Message() << "size " << m << ", block " << mb << ", band " << band_size
                                     << ", grid " << grid.size());
 
   testBandToTridiagOutputCorrectness(uplo, band_size, m, mb, mat_a_h, mat_trid, mat_v, grid);

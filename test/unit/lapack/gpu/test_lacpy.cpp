@@ -74,7 +74,7 @@ TYPED_TEST(LacpyTestGPU, CorrectnessLocal) {
       whip::stream_synchronize(stream);
 
       // Verify
-      SCOPED_TRACE(::testing::Message() << "Comparison test m=" << m << " n=" << n << " lda=" << lda
+      [[maybe_unused]] SCOPED_TRACE(::testing::Message() << "Comparison test m=" << m << " n=" << n << " lda=" << lda
                                         << " ldb=" << ldb << " uplo=" << uplo);
 
       const auto error = TypeUtilities<T>::error;

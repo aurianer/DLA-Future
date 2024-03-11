@@ -97,7 +97,7 @@ int precedence_main(int, char*[]) {
 
   // Default configuration.
   {
-    InitializeTester init(current_initializer_type, argc_without_option, argv_without_option);
+    [[maybe_unused]] InitializeTester init(current_initializer_type, argc_without_option, argv_without_option);
     dlaf::configuration cfg = dlaf::internal::getConfiguration();
     EXPECT_EQ(default_val, cfg.num_hp_gpu_streams_per_thread);
   }
@@ -107,7 +107,7 @@ int precedence_main(int, char*[]) {
     dlaf::configuration user_cfg = default_cfg;
     user_cfg.num_hp_gpu_streams_per_thread = default_val + 1;
 
-    InitializeTester init(current_initializer_type, argc_without_option, argv_without_option, user_cfg);
+    [[maybe_unused]] InitializeTester init(current_initializer_type, argc_without_option, argv_without_option, user_cfg);
     dlaf::configuration cfg = dlaf::internal::getConfiguration();
     EXPECT_EQ(user_cfg.num_hp_gpu_streams_per_thread, cfg.num_hp_gpu_streams_per_thread);
   }
@@ -120,7 +120,7 @@ int precedence_main(int, char*[]) {
     const std::string env_var_val_str = std::to_string(env_var_val);
     setenv(env_var_name, env_var_val_str.c_str(), 1);
 
-    InitializeTester init(current_initializer_type, argc_without_option, argv_without_option, user_cfg);
+    [[maybe_unused]] InitializeTester init(current_initializer_type, argc_without_option, argv_without_option, user_cfg);
     dlaf::configuration cfg = dlaf::internal::getConfiguration();
     EXPECT_EQ(env_var_val, cfg.num_hp_gpu_streams_per_thread);
   }
@@ -139,7 +139,7 @@ int precedence_main(int, char*[]) {
     const int argc_with_option = 2;
     const char* argv_with_option[] = {binary_name, command_line_option_str.c_str()};
 
-    InitializeTester init(current_initializer_type, argc_with_option, argv_with_option, user_cfg);
+    [[maybe_unused]] InitializeTester init(current_initializer_type, argc_with_option, argv_with_option, user_cfg);
     dlaf::configuration cfg = dlaf::internal::getConfiguration();
     EXPECT_EQ(command_line_option_val, cfg.num_hp_gpu_streams_per_thread);
   }
@@ -166,7 +166,7 @@ int vm_no_command_line_option_main(pika::program_options::variables_map& vm) {
 
   // Default configuration.
   {
-    InitializeTester init(current_initializer_type, vm);
+    [[maybe_unused]] InitializeTester init(current_initializer_type, vm);
     dlaf::configuration cfg = dlaf::internal::getConfiguration();
     EXPECT_EQ(default_val, cfg.num_hp_gpu_streams_per_thread);
   }
@@ -176,7 +176,7 @@ int vm_no_command_line_option_main(pika::program_options::variables_map& vm) {
     dlaf::configuration user_cfg = default_cfg;
     user_cfg.num_hp_gpu_streams_per_thread = default_val + 1;
 
-    InitializeTester init(current_initializer_type, vm, user_cfg);
+    [[maybe_unused]] InitializeTester init(current_initializer_type, vm, user_cfg);
     dlaf::configuration cfg = dlaf::internal::getConfiguration();
     EXPECT_EQ(user_cfg.num_hp_gpu_streams_per_thread, cfg.num_hp_gpu_streams_per_thread);
   }
@@ -189,7 +189,7 @@ int vm_no_command_line_option_main(pika::program_options::variables_map& vm) {
     const std::string env_var_val_str = std::to_string(env_var_val);
     setenv(env_var_name, env_var_val_str.c_str(), 1);
 
-    InitializeTester init(current_initializer_type, vm, user_cfg);
+    [[maybe_unused]] InitializeTester init(current_initializer_type, vm, user_cfg);
     dlaf::configuration cfg = dlaf::internal::getConfiguration();
     EXPECT_EQ(env_var_val, cfg.num_hp_gpu_streams_per_thread);
   }
@@ -208,7 +208,7 @@ int vm_no_command_line_option_main(pika::program_options::variables_map& vm) {
     const int argc_with_option = 2;
     const char* argv_with_option[] = {binary_name, command_line_option_str.c_str()};
 
-    InitializeTester init(current_initializer_type, argc_with_option, argv_with_option, user_cfg);
+    [[maybe_unused]] InitializeTester init(current_initializer_type, argc_with_option, argv_with_option, user_cfg);
     dlaf::configuration cfg = dlaf::internal::getConfiguration();
     EXPECT_EQ(command_line_option_val, cfg.num_hp_gpu_streams_per_thread);
   }
@@ -236,7 +236,7 @@ int vm_command_line_option_main(pika::program_options::variables_map& vm) {
     setenv(env_var_name, env_var_val_str.c_str(), 1);
     const std::size_t command_line_option_val = env_var_val + 1;
 
-    InitializeTester init(current_initializer_type, vm, user_cfg);
+    [[maybe_unused]] InitializeTester init(current_initializer_type, vm, user_cfg);
     dlaf::configuration cfg = dlaf::internal::getConfiguration();
     EXPECT_EQ(command_line_option_val, cfg.num_hp_gpu_streams_per_thread);
   }

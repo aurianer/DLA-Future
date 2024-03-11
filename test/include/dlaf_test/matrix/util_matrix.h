@@ -302,7 +302,7 @@ void checkMatrixDistribution(const Distribution& distribution, const MatrixType&
   do {                                                                \
     std::stringstream s;                                              \
     s << "Rank " << mat.distribution().rankIndex();                   \
-    SCOPED_TRACE(s.str());                                            \
+    [[maybe_unused]] SCOPED_TRACE(s.str());                                            \
     ::dlaf::matrix::test::checkMatrixDistribution(distribution, mat); \
   } while (0)
 

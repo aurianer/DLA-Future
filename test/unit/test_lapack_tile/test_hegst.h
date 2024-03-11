@@ -49,7 +49,7 @@ void testHegst(const int itype, const blas::Uplo uplo, const SizeType m, const S
   std::stringstream s;
   s << "HEGST: itype = " << itype << ", uplo = " << uplo;
   s << ", m = " << m << ", lda = " << lda << ", ldb = " << ldb;
-  SCOPED_TRACE(s.str());
+  [[maybe_unused]] SCOPED_TRACE(s.str());
 
   CHECK_TILE_NEAR(res_a, a, 10 * (m + 1) * TypeUtilities<T>::error,
                   10 * (m + 1) * TypeUtilities<T>::error);

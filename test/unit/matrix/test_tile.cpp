@@ -342,7 +342,7 @@ void checkNonReady(const std::vector<SenderWrapper>& subtiles) {
 
 template <class T, Device D>
 void testShareReadWriteTile(std::string name, TileElementSize size, SizeType ld) {
-  SCOPED_TRACE(name);
+  [[maybe_unused]] SCOPED_TRACE(name);
 
   auto [tile, tile_ptr] = createTileAndPtrChecker<T, D>(size, ld);
   auto pipeline = createTilePipeline<T, D>(std::move(tile));
@@ -415,7 +415,7 @@ void checkReadyAndDependencyChain(F&& tile_ptr, std::vector<TileSender>& subtile
 template <class T, Device D>
 void testSubtileConst(std::string name, TileElementSize size, SizeType ld, const SubTileSpec& spec,
                       std::size_t last_dep) {
-  SCOPED_TRACE(name);
+  [[maybe_unused]] SCOPED_TRACE(name);
 
   auto [tile, tile_ptr] = createTileAndPtrChecker<T, D>(size, ld);
   auto pipeline = createTilePipeline<T, D>(std::move(tile));
@@ -444,7 +444,7 @@ void testSubtileConst(std::string name, TileElementSize size, SizeType ld, const
 template <class T, Device D>
 void testSubtilesConst(std::string name, TileElementSize size, SizeType ld,
                        std::vector<SubTileSpec> specs, std::size_t last_dep) {
-  SCOPED_TRACE(name);
+  [[maybe_unused]] SCOPED_TRACE(name);
   ASSERT_LE(last_dep, specs.size());
 
   auto [tile, tile_ptr] = createTileAndPtrChecker<T, D>(size, ld);
@@ -482,7 +482,7 @@ void testSubtilesConst(std::string name, TileElementSize size, SizeType ld,
 template <class T, Device D>
 void testSubtilesConstShareReadWriteTile(std::string name, TileElementSize size, SizeType ld,
                                          std::vector<SubTileSpec> specs, std::size_t last_dep) {
-  SCOPED_TRACE(name);
+  [[maybe_unused]] SCOPED_TRACE(name);
   ASSERT_LE(last_dep, specs.size());
 
   auto [tile, tile_ptr] = createTileAndPtrChecker<T, D>(size, ld);
@@ -521,7 +521,7 @@ template <class T, Device D>
 void testSubOfSubtileConst(std::string name, TileElementSize size, SizeType ld,
                            std::vector<SubTileSpec> specs, const SubTileSpec& subspec,
                            std::size_t last_dep) {
-  SCOPED_TRACE(name);
+  [[maybe_unused]] SCOPED_TRACE(name);
   ASSERT_LE(1, specs.size());  // Need at least a subtile to create a subsubtile
   ASSERT_LE(last_dep, specs.size() + 1);
   // specs.size() -> subsubtile
@@ -601,7 +601,7 @@ TYPED_TEST(TileTest, SubtileConst) {
 
 template <class T, Device D>
 void testSubtile(std::string name, TileElementSize size, SizeType ld, const SubTileSpec& spec) {
-  SCOPED_TRACE(name);
+  [[maybe_unused]] SCOPED_TRACE(name);
 
   auto [tile, tile_ptr] = createTileAndPtrChecker<T, D>(size, ld);
   auto pipeline = createTilePipeline<T, D>(std::move(tile));
@@ -628,7 +628,7 @@ void testSubtile(std::string name, TileElementSize size, SizeType ld, const SubT
 template <class T, Device D>
 void testSubtilesDisjoint(std::string name, TileElementSize size, SizeType ld,
                           const std::vector<SubTileSpec>& specs, std::size_t last_dep) {
-  SCOPED_TRACE(name);
+  [[maybe_unused]] SCOPED_TRACE(name);
   if (specs.size() > 0) {
     ASSERT_LT(last_dep, specs.size());
   }
@@ -663,7 +663,7 @@ void testSubtilesDisjoint(std::string name, TileElementSize size, SizeType ld,
 template <class T, Device D>
 void testSubOfSubtile(std::string name, TileElementSize size, SizeType ld,
                       std::vector<SubTileSpec> specs, const SubTileSpec& subspec) {
-  SCOPED_TRACE(name);
+  [[maybe_unused]] SCOPED_TRACE(name);
   ASSERT_LE(1, specs.size());  // Need at least a subtile to create a subsubtile
   // last_dep = 0 -> subsubtile
 

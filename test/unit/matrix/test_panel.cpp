@@ -467,7 +467,7 @@ void testShrink(const GlobalElementSize size, const TileElementSize blocksize,
       if constexpr (StoreTransposed::Yes == Storage)
         tile_size.transpose();
 
-      SCOPED_TRACE(message);
+      [[maybe_unused]] SCOPED_TRACE(message);
       EXPECT_EQ(tile_size, panel_tile.size());
     }
 
@@ -484,7 +484,7 @@ void testShrink(const GlobalElementSize size, const TileElementSize blocksize,
       if constexpr (StoreTransposed::Yes == Storage)
         tile_size.transpose();
 
-      SCOPED_TRACE(message);
+      [[maybe_unused]] SCOPED_TRACE(message);
       EXPECT_EQ(tile_size, panel_tile.size());
 
       CHECK_TILE_EQ(fixedValueTile(counter++), panel_tile);
