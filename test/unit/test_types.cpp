@@ -40,7 +40,7 @@ const ContainerType UPPER_BOUND() {
 /// static_cast<To> of the value in From.
 template <class From, class To>
 void TEST_CAST(To (*cast_func)(From), const From value, const source_location origin) {
-  ::testing::ScopedTrace trace(origin.filename, static_cast<int>(origin.line), "");
+  [[maybe_unused]] ::testing::ScopedTrace trace(origin.filename, static_cast<int>(origin.line), "");
   EXPECT_EQ(static_cast<To>(value), cast_func(value));
   EXPECT_EQ(static_cast<To>(value), (integral_cast<To, From>(value)));
 }
@@ -48,7 +48,7 @@ void TEST_CAST(To (*cast_func)(From), const From value, const source_location or
 /// Check that an error is generated during casting operation From -> To.
 template <class From, class To>
 void TEST_CAST_FAIL(To (*cast_func)(From), const From value, const source_location origin) {
-  ::testing::ScopedTrace trace(origin.filename, static_cast<int>(origin.line), "");
+  [[maybe_unused]] ::testing::ScopedTrace trace(origin.filename, static_cast<int>(origin.line), "");
   EXPECT_DEATH(cast_func(value), ERROR_MESSAGE);
   EXPECT_DEATH((integral_cast<To, From>(value)), ERROR_MESSAGE);
 }

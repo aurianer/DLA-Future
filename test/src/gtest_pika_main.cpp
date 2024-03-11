@@ -26,7 +26,7 @@
 // THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//
+
 //
 // Distributed Linear Algebra with Future (DLAF)
 //
@@ -51,7 +51,7 @@
 GTEST_API_ int test_main(pika::program_options::variables_map& vm) {
   std::printf("Running main() from gtest_pika_main.cpp\n");
   auto ret = [&] {
-    dlaf::ScopedInitializer init(vm);
+    [[maybe_unused]] dlaf::ScopedInitializer init(vm);
     return RUN_ALL_TESTS();
   }();
   pika::finalize();

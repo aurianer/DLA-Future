@@ -97,7 +97,7 @@ void is_orthogonal(const MatrixLocal<const T>& matrix) {
 
   // Note:
   // Orthogonality requires a strict error test, => n * error
-  SCOPED_TRACE("Orthogonality test");
+  [[maybe_unused]] SCOPED_TRACE("Orthogonality test");
   const auto error = matrix.size().rows() * TypeUtilities<T>::error;
   CHECK_MATRIX_NEAR(eye, ortho, 0, error);
 }
@@ -320,7 +320,7 @@ void testComputeTFactor(const SizeType m, const SizeType k, const SizeType mb, c
 
   is_orthogonal(h_result);
 
-  SCOPED_TRACE(::testing::Message() << "Comparison test m=" << m << " k=" << k << " mb=" << mb
+  [[maybe_unused]] SCOPED_TRACE(::testing::Message() << "Comparison test m=" << m << " k=" << k << " mb=" << mb
                                     << " nb=" << nb << " v_start=" << v_start);
   const auto error = h_result.size().rows() * k * TypeUtilities<T>::error;
   CHECK_MATRIX_NEAR(h_expected, h_result, 0, error);
@@ -406,7 +406,7 @@ void testComputeTFactor(comm::CommunicatorGrid& grid, const SizeType m, const Si
   // The error threshold has been determined considering that ~2*n*nb arithmetic operations (n*nb
   // multiplications and n*nb addition) are needed to compute each of the element of the matrix `h_result`,
   // and that TypeUtilities<T>::error indicates maximum error for a multiplication + addition.
-  SCOPED_TRACE(::testing::Message() << "Comparison test m=" << m << " k=" << k << " mb=" << mb
+  [[maybe_unused]] SCOPED_TRACE(::testing::Message() << "Comparison test m=" << m << " k=" << k << " mb=" << mb
                                     << " nb=" << nb << " v_start=" << v_start);
   const auto error = h_result.size().rows() * k * TypeUtilities<T>::error;
   CHECK_MATRIX_NEAR(h_expected, h_result, 0, error);

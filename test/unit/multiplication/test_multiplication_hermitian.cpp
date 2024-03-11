@@ -98,7 +98,7 @@ void testHermitianMultiplication(const blas::Side side, const blas::Uplo uplo, c
 
   // SCOPED_TRACE cannot yield.
   mat_ch.waitLocalTiles();
-  SCOPED_TRACE(::testing::Message() << "m " << m << "n " << n << ", mb " << mb << ", nb " << nb);
+  [[maybe_unused]] SCOPED_TRACE(::testing::Message() << "m " << m << "n " << n << ", mb " << mb << ", nb " << nb);
   CHECK_MATRIX_NEAR(res_c, mat_ch, 10 * (m + 1) * TypeUtilities<T>::error,
                     10 * (m + 1) * TypeUtilities<T>::error);
 }
@@ -143,7 +143,7 @@ void testHermitianMultiplication(comm::CommunicatorGrid& grid, const blas::Side 
 
   // SCOPED_TRACE cannot yield.
   mat_ch.waitLocalTiles();
-  SCOPED_TRACE(::testing::Message() << "m " << m << ", n " << n << ", mb " << mb << ", nb " << nb);
+  [[maybe_unused]] SCOPED_TRACE(::testing::Message() << "m " << m << ", n " << n << ", mb " << mb << ", nb " << nb);
   CHECK_MATRIX_NEAR(res_c, mat_ch, 10 * (m + 1) * TypeUtilities<T>::error,
                     10 * (m + 1) * TypeUtilities<T>::error);
 }

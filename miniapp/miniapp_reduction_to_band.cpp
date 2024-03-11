@@ -222,8 +222,8 @@ struct reductionToBandMiniapp {
 };
 
 int pika_main(pika::program_options::variables_map& vm) {
-  pika::scoped_finalize pika_finalizer;
-  dlaf::ScopedInitializer init(vm);
+  [[maybe_unused]] pika::scoped_finalize pika_finalizer;
+  [[maybe_unused]] dlaf::ScopedInitializer init(vm);
 
   const Options opts(vm);
   dlaf::miniapp::dispatchMiniapp<reductionToBandMiniapp>(opts);

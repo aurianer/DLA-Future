@@ -61,7 +61,7 @@ void testGemm(const blas::Op op_a, const blas::Op op_b, const SizeType m, const 
   s << "GEMM: " << op_a << ", " << op_b;
   s << ", m = " << m << ", n = " << n << ", k = " << k;
   s << ", lda = " << lda << ", ldb = " << ldb << ", ldc = " << ldc;
-  SCOPED_TRACE(s.str());
+  [[maybe_unused]] SCOPED_TRACE(s.str());
 
   // Check result against analytical result.
   CHECK_TILE_NEAR(res_c, c, 2 * (k + 1) * TypeUtilities<T>::error,

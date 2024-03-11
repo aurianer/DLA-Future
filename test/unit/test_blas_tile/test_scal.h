@@ -51,7 +51,7 @@ void testScal(const SizeType m, const SizeType n, const SizeType extra_lda) {
   s << "Scal: ";
   s << ", m = " << m << ", n = " << n;
   s << ", lda = " << lda;
-  SCOPED_TRACE(s.str());
+  [[maybe_unused]] SCOPED_TRACE(s.str());
 
   // Check result against analytical result.
   CHECK_TILE_NEAR(res_a, a, 2 * TypeUtilities<T>::error, 2 * TypeUtilities<T>::error);

@@ -84,7 +84,7 @@ public:
 private:
   template <class F>
   static auto checkTile(F&& f, const matrix::Tile<T, Device::CPU>& tile) noexcept {
-    dlaf::common::internal::SingleThreadedBlasScope single;
+    [[maybe_unused]] dlaf::common::internal::SingleThreadedBlasScope single;
 
     auto norm =
         lapack::lange(lapack::Norm::Max, tile.size().rows(), tile.size().cols(), tile.ptr(), tile.ld());

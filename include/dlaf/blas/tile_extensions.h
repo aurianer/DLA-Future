@@ -80,7 +80,7 @@ void add(T alpha, const matrix::Tile<const T, Device::CPU>& tile_b,
   DLAF_ASSERT(equal_size(tile_a, tile_b), tile_a, tile_b);
   if (tile_a.size().isEmpty())
     return;
-  common::internal::SingleThreadedBlasScope single;
+  [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
   for (auto j = 0; j < tile_a.size().cols(); ++j)
     blas::axpy(tile_a.size().rows(), alpha, tile_b.ptr({0, j}), 1, tile_a.ptr({0, j}), 1);
 }
@@ -100,7 +100,7 @@ DLAF_MAKE_CALLABLE_OBJECT(add);
 
 template <class T>
 void scal(T beta, const matrix::Tile<T, Device::CPU>& tile) {
-  common::internal::SingleThreadedBlasScope single;
+  [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
   blas::gemm(blas::Layout::ColMajor, blas::Op::NoTrans, blas::Op::NoTrans, tile.size().rows(),
              tile.size().cols(), 0, T(0), nullptr, tile.ld(), nullptr, 1, beta, tile.ptr(), tile.ld());
 }

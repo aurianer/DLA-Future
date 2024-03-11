@@ -57,7 +57,7 @@ void testLaset(blas::Uplo uplo, const SizeType m, const SizeType n, T alpha, T b
   std::stringstream s;
   s << "LASET: uplo = " << uplo << ", m = " << m << ", n = " << n;
   s << ", alpha = " << alpha << ", beta = " << beta << ", lda = " << lda;
-  SCOPED_TRACE(s.str());
+  [[maybe_unused]] SCOPED_TRACE(s.str());
 
   CHECK_TILE_EQ(res, tile);
 }
@@ -77,7 +77,7 @@ void testSet0(const SizeType m, const SizeType n, SizeType extra_lda) {
 
   std::stringstream s;
   s << "SET0: m = " << m << ", n = " << n << ", lda = " << lda;
-  SCOPED_TRACE(s.str());
+  [[maybe_unused]] SCOPED_TRACE(s.str());
 
   CHECK_TILE_EQ(res, tile);
 }

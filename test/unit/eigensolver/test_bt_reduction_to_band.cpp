@@ -191,7 +191,7 @@ void testBackTransformationReductionToBand(SizeType m, SizeType n, SizeType mb, 
   auto result = [&c_loc](const GlobalElementIndex& index) { return c_loc(index); };
 
   mat_c_h.waitLocalTiles();
-  SCOPED_TRACE(::testing::Message() << "m = " << m << ", n = " << n << ", mb = " << mb << ", nb = " << nb
+  [[maybe_unused]] SCOPED_TRACE(::testing::Message() << "m = " << m << ", n = " << n << ", mb = " << mb << ", nb = " << nb
                                     << ", b = " << b);
   const auto error = (mat_c_h.size().rows() + 1) * dlaf::test::TypeUtilities<T>::error;
   CHECK_MATRIX_NEAR(result, mat_c_h, error, error);
@@ -229,7 +229,7 @@ void testBackTransformationReductionToBand(comm::CommunicatorGrid& grid, SizeTyp
   auto result = [&c_loc](const GlobalElementIndex& index) { return c_loc(index); };
 
   mat_c_h.waitLocalTiles();
-  SCOPED_TRACE(::testing::Message() << grid << ", m = " << m << ", n = " << n << ", mb = " << mb
+  [[maybe_unused]] SCOPED_TRACE(::testing::Message() << grid << ", m = " << m << ", n = " << n << ", mb = " << mb
                                     << ", nb = " << nb << ", b = " << b);
   const auto error = (mat_c_h.size().rows() + 1) * dlaf::test::TypeUtilities<T>::error;
   CHECK_MATRIX_NEAR(result, mat_c_h, error, error);

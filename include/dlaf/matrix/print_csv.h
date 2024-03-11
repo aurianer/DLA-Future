@@ -62,11 +62,11 @@ void print(format::csv, std::string sym, Matrix<const T, Device::CPU>& mat,
 
   for (SizeType irow = 0; irow < nrow; ++irow) {
     SizeType tilerow = irow / blockrow;
-    SizeType elrow = irow % blockrow;
+    [[maybe_unused]] SizeType elrow = irow % blockrow;
 
     for (SizeType icol = 0; icol < ncol; ++icol) {
       SizeType tilecol = icol / blockcol;
-      SizeType elcol = icol % blockcol;
+      [[maybe_unused]] SizeType elcol = icol % blockcol;
 
       const LocalTileIndex idx = {tilerow, tilecol};
       const auto tile = pika::this_thread::experimental::sync_wait(mat.read(idx));

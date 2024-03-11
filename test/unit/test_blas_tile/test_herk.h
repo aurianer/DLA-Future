@@ -83,7 +83,7 @@ void testHerk(const blas::Uplo uplo, const blas::Op op_a, const SizeType n, cons
   s << "HERK: " << uplo << ", " << op_a;
   s << ", n = " << n << ", k = " << k;
   s << ", lda = " << lda << ", ldc = " << ldc;
-  SCOPED_TRACE(s.str());
+  [[maybe_unused]] SCOPED_TRACE(s.str());
 
   CHECK_TILE_NEAR(res_c, c, (k + 1) * TypeUtilities<T>::error, (k + 1) * TypeUtilities<T>::error);
 }

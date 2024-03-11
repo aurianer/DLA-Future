@@ -297,7 +297,7 @@ template <class T>
 void gemm(const blas::Op op_a, const blas::Op op_b, const T alpha, const Tile<const T, Device::CPU>& a,
           const Tile<const T, Device::CPU>& b, const T beta, const Tile<T, Device::CPU>& c) noexcept {
   auto s = tile::internal::getGemmSizes(op_a, op_b, a, b, c);
-  common::internal::SingleThreadedBlasScope single;
+  [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
   blas::gemm(blas::Layout::ColMajor, op_a, op_b, s.m, s.n, s.k, alpha, a.ptr(), a.ld(), b.ptr(), b.ld(),
              beta, c.ptr(), c.ld());
 }
@@ -307,7 +307,7 @@ void hemm(const blas::Side side, const blas::Uplo uplo, const T alpha,
           const Tile<const T, Device::CPU>& a, const Tile<const T, Device::CPU>& b, const T beta,
           const Tile<T, Device::CPU>& c) {
   auto s = tile::internal::getHemmSizes(side, a, b, c);
-  common::internal::SingleThreadedBlasScope single;
+  [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
   blas::hemm(blas::Layout::ColMajor, side, uplo, s.m, s.n, alpha, a.ptr(), a.ld(), b.ptr(), b.ld(), beta,
              c.ptr(), c.ld());
 }
@@ -317,7 +317,7 @@ void her2k(const blas::Uplo uplo, const blas::Op op, const T alpha, const Tile<c
            const Tile<const T, Device::CPU>& b, const BaseType<T> beta,
            const Tile<T, Device::CPU>& c) noexcept {
   auto s = tile::internal::getHer2kSizes(op, a, b, c);
-  common::internal::SingleThreadedBlasScope single;
+  [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
   blas::her2k(blas::Layout::ColMajor, uplo, op, s.n, s.k, alpha, a.ptr(), a.ld(), b.ptr(), b.ld(), beta,
               c.ptr(), c.ld());
 }
@@ -327,7 +327,7 @@ void herk(const blas::Uplo uplo, const blas::Op op, const BaseType<T> alpha,
           const Tile<const T, Device::CPU>& a, const BaseType<T> beta,
           const Tile<T, Device::CPU>& c) noexcept {
   auto s = tile::internal::getHerkSizes(op, a, c);
-  common::internal::SingleThreadedBlasScope single;
+  [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
   blas::herk(blas::Layout::ColMajor, uplo, op, s.n, s.k, alpha, a.ptr(), a.ld(), beta, c.ptr(), c.ld());
 }
 
@@ -336,7 +336,7 @@ template <class T>
 void trmm(const blas::Side side, const blas::Uplo uplo, const blas::Op op, const blas::Diag diag,
           const T alpha, const Tile<const T, Device::CPU>& a, const Tile<T, Device::CPU>& b) noexcept {
   auto s = tile::internal::getTrmmSizes(side, a, b);
-  common::internal::SingleThreadedBlasScope single;
+  [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
   blas::trmm(blas::Layout::ColMajor, side, uplo, op, diag, s.m, s.n, alpha, a.ptr(), a.ld(), b.ptr(),
              b.ld());
 }
@@ -351,7 +351,7 @@ void trmm3(const blas::Side side, const blas::Uplo uplo, const blas::Op op, cons
   DLAF_ASSERT(b.ptr() == nullptr || b.ptr() != c.ptr(), b.ptr(), c.ptr());
 
   matrix::internal::copy(b, c);
-  common::internal::SingleThreadedBlasScope single;
+  [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
   blas::trmm(blas::Layout::ColMajor, side, uplo, op, diag, s.m, s.n, alpha, a.ptr(), a.ld(), c.ptr(),
              c.ld());
 }
@@ -360,7 +360,7 @@ template <class T>
 void trsm(const blas::Side side, const blas::Uplo uplo, const blas::Op op, const blas::Diag diag,
           const T alpha, const Tile<const T, Device::CPU>& a, const Tile<T, Device::CPU>& b) noexcept {
   auto s = tile::internal::getTrsmSizes(side, a, b);
-  common::internal::SingleThreadedBlasScope single;
+  [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
   blas::trsm(blas::Layout::ColMajor, side, uplo, op, diag, s.m, s.n, alpha, a.ptr(), a.ld(), b.ptr(),
              b.ld());
 }

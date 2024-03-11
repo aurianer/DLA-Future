@@ -106,7 +106,7 @@ void test_lantr(const lapack::Norm norm, const blas::Uplo uplo, const blas::Diag
                 const Tile<T, Device::CPU>& a, const NormT<T> norm_expected) {
   set(a, TileSetter<T>{a.size(), uplo});
 
-  SCOPED_TRACE(::testing::Message() << "LANTR: " << norm << ", " << a.size() << ", ld = " << a.ld()
+  [[maybe_unused]] SCOPED_TRACE(::testing::Message() << "LANTR: " << norm << ", " << a.size() << ", ld = " << a.ld()
                                     << " uplo = " << uplo << " diag = " << diag);
 
   EXPECT_NEAR(norm_expected, lantr(norm, uplo, diag, a), norm_expected * TypeUtilities<T>::error);
