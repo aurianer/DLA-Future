@@ -169,7 +169,6 @@ T stringToBlasEnum(const std::string& option_name, const std::string& x,
         valid_values_stream << ", ";
       }
     }
-    std::string option_name_dashes = "--" + option_name;
     DLAF_MINIAPP_INVALID_OPTION_VALUE(option_name, x, valid_values_stream.str());
   }
 
