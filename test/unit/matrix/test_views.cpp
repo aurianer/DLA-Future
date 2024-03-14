@@ -20,8 +20,14 @@
 #include <dlaf/matrix/views.h>
 #include <dlaf/types.h>
 
+#if defined(__NVCOMPILER)
+#pragma diag_suppress 550
+#endif
 #include <gtest/gtest.h>
 #include <gtest/internal/gtest-internal.h>
+#if defined(__NVCOMPILER)
+#pragma warning 550
+#endif
 
 #include <dlaf_test/comm_grids/grids_6_ranks.h>
 

@@ -18,7 +18,13 @@
 
 #include <dlaf/init.h>
 
+#if defined(__NVCOMPILER)
+#pragma diag_suppress 550
+#endif
 #include <gtest/gtest.h>
+#if defined(__NVCOMPILER)
+#pragma warning 550
+#endif
 
 static const char* binary_name = "init_test";
 static const char* env_var_name = "DLAF_NUM_HP_GPU_STREAMS_PER_THREAD";

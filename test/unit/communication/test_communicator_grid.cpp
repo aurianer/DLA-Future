@@ -20,7 +20,13 @@
 #include <dlaf/communication/communicator_grid.h>
 #include <dlaf/communication/error.h>
 
+#if defined(__NVCOMPILER)
+#pragma diag_suppress 550
+#endif
 #include <gtest/gtest.h>
+#if defined(__NVCOMPILER)
+#pragma warning 550
+#endif
 
 using namespace dlaf::comm;
 using dlaf::common::Ordering;
