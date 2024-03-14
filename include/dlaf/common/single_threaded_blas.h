@@ -17,7 +17,13 @@
 #endif
 
 namespace dlaf::common::internal {
-class [[nodiscard]] SingleThreadedBlasScope {
+class
+#if defined(__NVCOMPILER)
+    [[maybe_unused]]
+#else
+    [[nodiscard]]
+#endif
+    SingleThreadedBlasScope {
 public:
   SingleThreadedBlasScope();
   ~SingleThreadedBlasScope();
