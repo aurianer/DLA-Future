@@ -82,7 +82,7 @@ void testBandToTridiagOutputCorrectness(const blas::Uplo uplo, const SizeType ba
 
     T tau = v[0];
     v[0] = T{1};
-    lapack::larf(blas::Side::Left, size_hhr, m, v, 1, tau, mat_local.ptr({first_index, 0}), ld);
+    lapack::larf(blas::Side::Left, size_hhr, m, v, 1, tau, mat_local.ptr(GlobalElementIndex{first_index, 0}), ld);
     lapack::larf(blas::Side::Right, m, size_hhr, v, 1, dlaf::conj(tau), mat_local.ptr({0, first_index}),
                  ld);
   };
@@ -98,7 +98,7 @@ void testBandToTridiagOutputCorrectness(const blas::Uplo uplo, const SizeType ba
       SizeType size_hhr = std::min(band_size, m - first_index);
 
       SizeType i = (sweep / band_size + step) * band_size;
-      T* v = mat_v_local.ptr({i, sweep});
+      T* v = mat_v_local.ptr(GlobalElementIndex{i, sweep});
       apply_left_right(size_hhr, v, first_index);
     }
   }
