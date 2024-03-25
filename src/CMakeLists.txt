@@ -62,6 +62,7 @@ option(DLAF_ASSERT_HEAVY_ENABLE "Enable high impact assertions" ${DLAF_ASSERT_HE
 add_library(dlaf.prop_private INTERFACE)
 target_compile_options(dlaf.prop_private INTERFACE $<$<NOT:$<CXX_COMPILER_ID:NVHPC>>:-gz>)
 target_link_options(dlaf.prop_private INTERFACE $<$<NOT:$<CXX_COMPILER_ID:NVHPC>>:-gz>)
+target_compile_options(dlaf.prop_private INTERFACE $<$<CXX_COMPILER_ID:NVHPC>:--display_error_number>)
 
 # Define DLAF's PUBLIC properties
 add_library(dlaf.prop INTERFACE)
