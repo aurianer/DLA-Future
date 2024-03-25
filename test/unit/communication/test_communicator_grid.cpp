@@ -120,7 +120,13 @@ TEST_P(CommunicatorGridTest, ConstructorWithParams) {
   test_grid_communication(grid);
 }
 
+#if __NVCOMPILER
+#pragma diag_suppress 550
+#endif
 INSTANTIATE_TEST_SUITE_P(ConstructorWithParams, CommunicatorGridTest, valid_orderings);
+#if __NVCOMPILER
+#pragma diag_default 550
+#endif
 
 TEST_P(CommunicatorGridTest, ConstructorWithArray) {
   Communicator world(MPI_COMM_WORLD);
@@ -135,7 +141,13 @@ TEST_P(CommunicatorGridTest, ConstructorWithArray) {
   test_grid_communication(grid);
 }
 
+#if __NVCOMPILER
+#pragma diag_suppress 550
+#endif
 INSTANTIATE_TEST_SUITE_P(ConstructorWithArray, CommunicatorGridTest, valid_orderings);
+#if __NVCOMPILER
+#pragma diag_default 550
+#endif
 
 TEST_P(CommunicatorGridTest, ConstructorIncomplete) {
   static_assert(NUM_MPI_RANKS > 1, "There must be at least 2 ranks");
@@ -181,7 +193,13 @@ TEST_P(CommunicatorGridTest, ConstructorIncomplete) {
   test_grid_communication(incomplete_grid);
 }
 
+#if __NVCOMPILER
+#pragma diag_suppress 550
+#endif
 INSTANTIATE_TEST_SUITE_P(ConstructorIncomplete, CommunicatorGridTest, valid_orderings);
+#if __NVCOMPILER
+#pragma diag_default 550
+#endif
 
 TEST_P(CommunicatorGridTest, Rank) {
   auto grid_dims = computeGridDims(NUM_MPI_RANKS);
@@ -209,7 +227,13 @@ TEST_P(CommunicatorGridTest, Rank) {
   EXPECT_EQ(coords.row(), complete_grid.colCommunicator().rank());
 }
 
+#if __NVCOMPILER
+#pragma diag_suppress 550
+#endif
 INSTANTIATE_TEST_SUITE_P(Rank, CommunicatorGridTest, valid_orderings);
+#if __NVCOMPILER
+#pragma diag_default 550
+#endif
 
 TEST_P(CommunicatorGridTest, RoundRobin) {
   Communicator world(MPI_COMM_WORLD);
@@ -258,4 +282,10 @@ TEST_P(CommunicatorGridTest, RoundRobin) {
   }
 }
 
+#if __NVCOMPILER
+#pragma diag_suppress 550
+#endif
 INSTANTIATE_TEST_SUITE_P(RoundRobin, CommunicatorGridTest, valid_orderings);
+#if __NVCOMPILER
+#pragma diag_default 550
+#endif
