@@ -133,8 +133,15 @@ void testMatrixSpecs(const Distribution& dist, const GlobalElementIndex offset_e
 
 using MatrixViewTest = ::testing::TestWithParam<::test::SubMatrixView::config_t>;
 
+
+#if __NVCOMPILER
+#pragma diag_suppress 550
+#endif
 INSTANTIATE_TEST_SUITE_P(AllConfigs, MatrixViewTest,
                          ::testing::ValuesIn(::test::SubMatrixView::configs));
+#if __NVCOMPILER
+#pragma diag_default 550
+#endif
 
 TEST_P(MatrixViewTest, OffsetLocal) {
   const auto& [size, blocksize, offset_e] = GetParam();
@@ -271,7 +278,13 @@ void testPanelSpecs(const Distribution& dist, const GlobalElementIndex offset_e,
 
 using PanelViewTest = ::testing::TestWithParam<::test::SubPanelView::config_t>;
 
+#if __NVCOMPILER
+#pragma diag_suppress 550
+#endif
 INSTANTIATE_TEST_SUITE_P(AllConfigs, PanelViewTest, ::testing::ValuesIn(::test::SubPanelView::configs));
+#if __NVCOMPILER
+#pragma diag_default 550
+#endif
 
 TEST_P(PanelViewTest, OffsetLocal) {
   const auto& [size, blocksize, offset_e, width] = GetParam();

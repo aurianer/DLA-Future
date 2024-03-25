@@ -270,4 +270,10 @@ TEST_P(InitTest, VariablesMapCommandLineOption) {
   pika::init(vm_command_line_option_main, argc_with_option, argv_with_option, p);
 }
 
+#if __NVCOMPILER
+#pragma diag_suppress 550
+#endif
 INSTANTIATE_TEST_SUITE_P(Init, InitTest, initializer_types);
+#if __NVCOMPILER
+#pragma diag_default 550
+#endif
