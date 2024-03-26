@@ -59,7 +59,7 @@ TYPED_TEST(LacpyTestGPU, CorrectnessLocal) {
       return T(ij.row() - ij.col());
   };
 
-  dlaf::common::internal::SingleThreadedBlasScope single;
+  [[maybe_unused]] dlaf::common::internal::SingleThreadedBlasScope single;
 
   for (const auto& [m, n, lda, ldb] : configs) {
     for (const auto uplo : {Uplo::Lower, Uplo::Upper, Uplo::General}) {

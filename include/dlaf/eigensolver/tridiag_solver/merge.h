@@ -829,7 +829,7 @@ void solveRank1Problem(const SizeType i_begin, const SizeType i_end, KSender&& k
         const T* z_ptr = z_tiles[0].ptr();
 
         {
-          common::internal::SingleThreadedBlasScope single;
+          [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
 
           T* eval_ptr = eval_tiles[0].ptr();
 
@@ -923,7 +923,7 @@ void solveRank1Problem(const SizeType i_begin, const SizeType i_end, KSender&& k
 
         // STEP 3: Compute eigenvectors of the modified rank-1 modification (normalize) (multi-thread)
         {
-          common::internal::SingleThreadedBlasScope single;
+          [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
 
           const T* w = z_ptr;
           T* s = ws_vecs[thread_idx]();
@@ -1401,7 +1401,7 @@ void solveRank1ProblemDist(CommSender&& row_comm, CommSender&& col_comm, const S
 
                  // STEP 1: LAED4 (multi-thread)
                  {
-                   common::internal::SingleThreadedBlasScope single;
+                   [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
 
                    T* eval_ptr = eval_tiles[0].ptr();
                    T* delta_ptr = ws_cols[thread_idx]();
@@ -1587,7 +1587,7 @@ void solveRank1ProblemDist(CommSender&& row_comm, CommSender&& col_comm, const S
 
                  // STEP 3a: Form evecs using weights vector and compute (local) sum of squares
                  {
-                   common::internal::SingleThreadedBlasScope single;
+                   [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
 
                    const T* w = ws_cols[nthreads]();
                    T* sum_squares = ws_row();
@@ -1642,7 +1642,7 @@ void solveRank1ProblemDist(CommSender&& row_comm, CommSender&& col_comm, const S
 
                  // STEP 3c: Normalize (compute norm of each column and scale column vector)
                  {
-                   common::internal::SingleThreadedBlasScope single;
+                   [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
 
                    const T* sum_squares = ws_row();
 

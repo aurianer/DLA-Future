@@ -28,7 +28,7 @@ using matrix::Tile;
 
 template <typename T>
 void scaleTile(const Tile<const BaseType<T>, Device::CPU>& lambda, const Tile<T, Device::CPU>& tile) {
-  common::internal::SingleThreadedBlasScope single;
+  [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
   for (SizeType j = 0; j < tile.size().cols(); ++j) {
     blas::scal(tile.size().rows(), lambda({j, 0}), tile.ptr({0, j}), 1);
   }

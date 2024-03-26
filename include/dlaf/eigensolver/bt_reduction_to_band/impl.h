@@ -53,7 +53,7 @@ struct Helpers<Backend::MC> {
   static void copyAndSetHHUpperTiles(SizeType j_diag, const matrix::Tile<const T, Device::CPU>& src,
                                      const matrix::Tile<T, Device::CPU>& dst) {
     matrix::internal::copy_o(src, dst);
-    common::internal::SingleThreadedBlasScope single;
+    [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
     lapack::laset(blas::Uplo::Upper, dst.size().rows(), dst.size().cols() - j_diag, T{0.}, T{1.},
                   dst.ptr({0, j_diag}), dst.ld());
   }

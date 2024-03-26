@@ -132,7 +132,7 @@ void setupHermitianBand(MatrixLocal<T>& matrix, const SizeType band_size) {
   DLAF_ASSERT(square_blocksize(matrix), matrix.blockSize());
   DLAF_ASSERT(square_size(matrix), matrix.size());
 
-  dlaf::common::internal::SingleThreadedBlasScope single;
+  [[maybe_unused]] dlaf::common::internal::SingleThreadedBlasScope single;
 
   // 0-diagonal: mirror band
   // note: diagonal subtiles are correctly set just in the lower part by the algorithm
@@ -284,7 +284,7 @@ auto checkResult(const SizeType k, const SizeType band_size, Matrix<const T, Dev
     // Q = H1 H2 ... Hn
     // H1 H2 ... Hn B Hn* ... H2* H1*
 
-    dlaf::common::internal::SingleThreadedBlasScope single;
+      [[maybe_unused]] dlaf::common::internal::SingleThreadedBlasScope single;
 
     // apply from left...
     const GlobalElementIndex left_offset = offset;

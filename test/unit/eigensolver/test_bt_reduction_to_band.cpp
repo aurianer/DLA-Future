@@ -105,7 +105,7 @@ Matrix<T, Device::CPU> setUpTest(
 
   dlaf::matrix::util::internal::getter_random<BaseType<T>> random_value(443);
 
-  dlaf::common::internal::SingleThreadedBlasScope single;
+  [[maybe_unused]] dlaf::common::internal::SingleThreadedBlasScope single;
 
   // Compute taus such that Q = I - v tau vH is orthogonal.
   // Real case: tau = 2 / (vH v)

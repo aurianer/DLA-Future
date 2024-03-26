@@ -171,7 +171,7 @@ void applyGivensRotationsToMatrixColumns(const SizeType i_begin, const SizeType 
     // Distribution of the merged subproblems
     matrix::Distribution distr(LocalElementSize(n, n), TileElementSize(nb, nb));
 
-    common::internal::SingleThreadedBlasScope single;
+    [[maybe_unused]] common::internal::SingleThreadedBlasScope single;
 
     for (const GivensRotation<T>& rot : rots) {
       // Get the index of the tile that has column `rot.i` and the index of the column within the tile.
@@ -363,7 +363,7 @@ void applyGivensRotationsToMatrixColumns(
                                     if constexpr (D == Device::CPU) {
                                       static_assert(sizeof...(ts) == 0,
                                                     "Parameter pack should be empty for MC.");
-                                      dlaf::common::internal::SingleThreadedBlasScope single;
+                                      [[maybe_unused]] dlaf::common::internal::SingleThreadedBlasScope single;
                                       blas::rot(m, col_x, 1, col_y, 1, rot.c, rot.s);
                                     }
 #ifdef DLAF_WITH_GPU

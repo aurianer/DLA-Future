@@ -68,7 +68,7 @@ void testGenEigensolverCorrectness(const blas::Uplo uplo, Matrix<const T, Device
 
   MatrixLocal<T> mat_be_local({m, m}, reference_a.blockSize());
 
-  dlaf::common::internal::SingleThreadedBlasScope single;
+  [[maybe_unused]] dlaf::common::internal::SingleThreadedBlasScope single;
 
   // Compute B E which is needed for both checks.
   blas::hemm(blas::Layout::ColMajor, blas::Side::Left, uplo, m, m, T{1}, mat_b_local.ptr(),
