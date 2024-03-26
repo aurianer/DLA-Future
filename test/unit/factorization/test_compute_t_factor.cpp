@@ -74,7 +74,7 @@ void is_orthogonal(const MatrixLocal<const T>& matrix) {
   // ortho = matrix . matrix*
   // clang-format off
   {
-    dlaf::common::internal::SingleThreadedBlasScope single;
+    [[maybe_unused]] dlaf::common::internal::SingleThreadedBlasScope single;
 
     blas::gemm(blas::Layout::ColMajor,
                blas::Op::NoTrans, blas::Op::ConjTrans,
@@ -105,7 +105,7 @@ std::tuple<Matrix<T, Device::CPU>, MatrixLocal<T>> computeHAndTFactor(const Size
                                                                       const MatrixLocal<const T>& v,
                                                                       GlobalElementIndex v_start) {
   // PRE: m >= k
-  dlaf::common::internal::SingleThreadedBlasScope single;
+    [[maybe_unused]] dlaf::common::internal::SingleThreadedBlasScope single;
 
   const SizeType m = v.size().rows() - v_start.row();
   const TileElementSize block_size = v.blockSize();
@@ -166,7 +166,7 @@ template <class T>
 MatrixLocal<T> computeHFromTFactor(const SizeType k, const Tile<const T, Device::CPU>& t,
                                    const MatrixLocal<const T>& v, GlobalElementIndex v_start) {
   // PRE: m >= k
-  dlaf::common::internal::SingleThreadedBlasScope single;
+    [[maybe_unused]] dlaf::common::internal::SingleThreadedBlasScope single;
 
   const SizeType m = v.size().rows() - v_start.row();
   const TileElementSize block_size = v.blockSize();

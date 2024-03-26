@@ -233,7 +233,7 @@ int pika_main(pika::program_options::variables_map& vm) {
 int main(int argc, char** argv) {
   using dlaf::SizeType;
 
-  dlaf::comm::mpi_init mpi_initter(argc, argv);
+  [[maybe_unused]] dlaf::comm::mpi_init mpi_initter(argc, argv);
 
   // options
   using namespace pika::program_options;

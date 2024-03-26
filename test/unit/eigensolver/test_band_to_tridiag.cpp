@@ -76,7 +76,7 @@ void testBandToTridiagOutputCorrectness(const blas::Uplo uplo, const SizeType ba
   auto mat_v_local = matrix::test::allGather(blas::Uplo::General, mat_v, grid...);
 
   auto apply_left_right = [&mat_local, m, ld](SizeType size_hhr, T* v, SizeType first_index) {
-    dlaf::common::internal::SingleThreadedBlasScope single;
+      [[maybe_unused]] dlaf::common::internal::SingleThreadedBlasScope single;
 
     T tau = v[0];
     v[0] = T{1};

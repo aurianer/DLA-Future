@@ -65,7 +65,7 @@ void testEigensolverCorrectness(const blas::Uplo uplo, Matrix<const T, Device::C
 
   MatrixLocal<T> workspace({m, m}, reference.blockSize());
 
-  dlaf::common::internal::SingleThreadedBlasScope single;
+  [[maybe_unused]] dlaf::common::internal::SingleThreadedBlasScope single;
 
   // Check eigenvectors orthogonality (E^H E == Id)
   blas::gemm(blas::Layout::ColMajor, blas::Op::ConjTrans, blas::Op::NoTrans, m, m, m, T{1},

@@ -208,7 +208,7 @@ int pika_main(pika::program_options::variables_map& vm) {
 
 int main(int argc, char** argv) {
   // Init MPI
-  dlaf::comm::mpi_init mpi_initter(argc, argv);
+  [[maybe_unused]] dlaf::comm::mpi_init mpi_initter(argc, argv);
 
   // options
   using namespace pika::program_options;
@@ -252,7 +252,7 @@ void setUpperToZeroForDiagonalTiles(Matrix<T, Device::CPU>& matrix) {
 
     auto tile_set = [](const typename Matrix<T, Device::CPU>::TileType& tile) {
       if (tile.size().rows() > 1) {
-        dlaf::common::internal::SingleThreadedBlasScope single;
+        [[maybe_unused]] dlaf::common::internal::SingleThreadedBlasScope single;
         lapack::laset(blas::Uplo::Upper, tile.size().rows() - 1, tile.size().cols() - 1, T{0}, T{0},
                       tile.ptr({0, 1}), tile.ld());
       }
