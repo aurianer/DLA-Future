@@ -135,7 +135,7 @@ public:
     return out << "position=" << grid.position_ << ", size=" << grid.grid_size_;
   }
 
-protected:
+private:
   Communicator full_;
   Communicator row_;
   Communicator col_;
