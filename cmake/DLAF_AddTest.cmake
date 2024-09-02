@@ -60,7 +60,7 @@ endfunction()
 function(DLAF_addTest test_target_name)
   set(options "")
   set(oneValueArgs MPIRANKS USE_MAIN)
-  set(multiValueArgs SOURCES COMPILE_DEFINITIONS INCLUDE_DIRS LIBRARIES ARGUMENTS)
+  set(multiValueArgs SOURCES GPU_SOURCES COMPILE_DEFINITIONS INCLUDE_DIRS LIBRARIES ARGUMENTS)
   cmake_parse_arguments(DLAF_AT "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
   ### Checks
@@ -68,7 +68,7 @@ function(DLAF_addTest test_target_name)
     message(FATAL_ERROR "Unknown arguments ${DLAF_AT_UNPARSED_ARGUMENTS}")
   endif()
 
-  if(NOT DLAF_AT_SOURCES)
+  if(NOT DLAF_AT_SOURCES AND NOT DLAF_AT_GPU_SOURCES)
     message(FATAL_ERROR "No sources specified for this test")
   endif()
 
@@ -217,6 +217,16 @@ function(DLAF_addTest test_target_name)
 
   ### Test executable target
   add_executable(${test_target_name} ${DLAF_AT_SOURCES})
+  if(DLAF_WITH_GPU)
+    target_sources(${test_target_name} PRIVATE ${DLAF_AT_GPU_SOURCES})
+    if(DLAF_WITH_HIP)
+      set_source_files_properties(${DLAF_AT_GPU_SOURCES} PROPERTIES LANGUAGE HIP LINKER_LANGUAGE HIP)
+    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "NVHPC")
+      foreach(gpu_source ${DLAF_AT_GPU_SOURCES})
+          DLAF_add_nvhpc_flags(${gpu_source})
+      endforeach()
+    endif()
+  endif()
   target_link_libraries(
     ${test_target_name} PRIVATE ${_gtest_tgt} DLAF_test ${DLAF_AT_LIBRARIES} dlaf.prop_private
   )
