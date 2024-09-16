@@ -209,6 +209,24 @@ if(DLAF_BUILD_TESTING)
   add_subdirectory(test)
 endif()
 
+option(DLAF_WITH_VIM_YCM "Generate completion file for VIM YouCompleteMe plugin" OFF)
+mark_as_advanced(DLAF_WITH_VIM_YCM)
+if(DLAF_WITH_VIM_YCM)
+  set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+  set(build_dir_file ${PROJECT_BINARY_DIR}/.ycm_extra_conf.py)
+  set(source_dir_file ${PROJECT_SOURCE_DIR}/.ycm_extra_conf.py)
+  configure_file(${PROJECT_SOURCE_DIR}/tools/vim/.ycm_extra_conf.py ${build_dir_file} @ONLY)
+  add_custom_target(
+    configure_ycm
+    COMMAND ${CMAKE_COMMAND} -E copy ${build_dir_file} ${source_dir_file}
+    COMMENT "Copying YCM config file to source directory"
+    VERBATIM
+  )
+  pika_info(
+    "VIM YouCompleteMe: run 'make configure_ycm' to copy config file to source directory and enable support in YCM. To enable automatic loading of configure file, add to your .vimrc option: \"let g:ycm_extra_conf_globlist = ['${PROJECT_SOURCE_DIR}/*']\""
+  )
+endif()
+
 # ---------------------------------------------------------------------------
 # Docs
 # ---------------------------------------------------------------------------
