@@ -21,7 +21,7 @@
 #include <dlaf/communication/communicator_pipeline.h>
 #include <dlaf/communication/index.h>
 #include <dlaf/communication/kernels/internal/reduce.h>
-#include <dlaf/communication/kernels/reduce.h>
+#include <dlaf/communication/kernels/reduce_snd.h>
 #include <dlaf/communication/message.h>
 #include <dlaf/communication/rdma.h>
 #include <dlaf/matrix/tile.h>
@@ -30,18 +30,6 @@
 #include <dlaf/sender/with_temporary_tile.h>
 
 namespace dlaf::comm {
-
-template <class T, Device D>
-[[nodiscard]] dlaf::matrix::ReadWriteTileSender<T, D> schedule_reduce_recv_in_place(
-    pika::execution::experimental::unique_any_sender<CommunicatorPipelineExclusiveWrapper> pcomm,
-    MPI_Op reduce_op, dlaf::matrix::ReadWriteTileSender<T, D> tile) {
-  constexpr Device DComm = CommunicationDevice_v<D>;
-
-  return internal::schedule_reduce_recv_in_place<DComm>(std::move(pcomm), reduce_op, std::move(tile));
-}
-
-DLAF_EXPAND_ETI_SDCZ_DEVICE(DLAF_SCHEDULE_REDUCE_RECV_IN_PLACE_ETI, );
-DLAF_SCHEDULE_REDUCE_RECV_IN_PLACE_ETI(, int, Device::CPU);
 
 template <class T, Device D>
 [[nodiscard]] pika::execution::experimental::unique_any_sender<> schedule_reduce_send(
@@ -54,4 +42,5 @@ template <class T, Device D>
 
 DLAF_EXPAND_ETI_SDCZ_DEVICE(DLAF_SCHEDULE_REDUCE_SEND_ETI, );
 DLAF_SCHEDULE_REDUCE_SEND_ETI(, int, Device::CPU);
+
 }

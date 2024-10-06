@@ -29,19 +29,15 @@
 
 namespace dlaf::comm {
 
-template <class T, Device DIn, Device DOut>
-[[nodiscard]] dlaf::matrix::ReadWriteTileSender<T, DOut> scheduleAllReduce(
+template <class T, Device D>
+[[nodiscard]] dlaf::matrix::ReadWriteTileSender<T, D> schedule_all_reduce_in_place(
     pika::execution::experimental::unique_any_sender<CommunicatorPipelineExclusiveWrapper> pcomm,
-    MPI_Op reduce_op, dlaf::matrix::ReadOnlyTileSender<T, DIn> tile_in,
-    dlaf::matrix::ReadWriteTileSender<T, DOut> tile_out) {
-  constexpr Device DCommIn = CommunicationDevice_v<DIn>;
-  constexpr Device DCommOut = CommunicationDevice_v<DOut>;
+    MPI_Op reduce_op, dlaf::matrix::ReadWriteTileSender<T, D> tile) {
+  constexpr Device DComm = CommunicationDevice_v<D>;
 
-  return internal::scheduleAllReduce<DCommIn, DCommOut>(std::move(pcomm), reduce_op, std::move(tile_in),
-                                                        std::move(tile_out));
+  return internal::schedule_all_reduce_in_place<DComm>(std::move(pcomm), reduce_op, std::move(tile));
 }
 
-DLAF_EXPAND_ETI_SDCZ_DEVICE(DLAF_SCHEDULE_ALL_REDUCE_ETI, );
-DLAF_SCHEDULE_ALL_REDUCE_ETI(, int, Device::CPU);
-
+DLAF_EXPAND_ETI_SDCZ_DEVICE(DLAF_SCHEDULE_ALL_REDUCE_IN_PLACE_ETI, );
+DLAF_SCHEDULE_ALL_REDUCE_IN_PLACE_ETI(, int, Device::CPU);
 }

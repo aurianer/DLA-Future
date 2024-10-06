@@ -203,9 +203,13 @@ DLAF_addSublibrary(
           communication/communicator_grid.cpp
           communication/datatypes.cpp
           communication/kernels/all_reduce.cpp
-          communication/kernels/broadcast.cpp
-          communication/kernels/p2p.cpp
-          communication/kernels/reduce.cpp
+          communication/kernels/all_reduce_in_place.cpp
+          communication/kernels/broadcast_rcv.cpp
+          communication/kernels/broadcast_snd.cpp
+          communication/kernels/p2p_rcv.cpp
+          communication/kernels/p2p_snd.cpp
+          communication/kernels/reduce_rcv.cpp
+          communication/kernels/reduce_snd.cpp
           init.cpp
           matrix/distribution.cpp
           matrix/layout_info.cpp
