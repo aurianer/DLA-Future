@@ -24,7 +24,7 @@ dlafpath = "/user-environment/linux-sles15-neoverse_v2/gcc-13.3.0/gcc-13.2.0/dla
 matrixrefpath = "/capstor/scratch/cscs/simbergm/src/DLA-Future"
 run_dir = f"~/ws/runs"
 
-time = 12 * 60  # minutes
+time = 6 * 60  # minutes (max for todi during HPL runs)
 nruns = 10
 #nodes_arr = [0.25, 0.5, 1, 2, 4, 8, 16, 32]
 #nodes_arr = [0.25, 0.5, 1, 2, 4, 8]
