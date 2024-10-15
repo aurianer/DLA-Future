@@ -1,4 +1,4 @@
-gcc-env:
+dlaf-env:
   compiler:
       - toolchain: gcc
         spec: gcc@13
