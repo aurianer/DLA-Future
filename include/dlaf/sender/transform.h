@@ -150,12 +150,15 @@ public:
 
 #if defined(__GNUC__)
 #pragma GCC diagnostic push
-//#pragma GCC diagnostic warning "-Wno-psabi"
-#pragma GCC diagnostic ignored "-Wpsabi"
+#pragma GCC diagnostic ignored "-Wabi" // Not working
+#pragma GCC diagnostic ignored "-Wpsabi" // Not working
+//#pragma GCC diagnostic warning "-Wno-psabi" // Not compiling
 //#pragma GCC diagnostic ignored "-Wabi-tag"
 //#pragma GCC diagnostic ignored "-Wabi-tag"
-//#pragma GCC diagnostic ignored "-Wabi=2"
-//#pragma GCC diagnostic warning "-Wabi=2"
+#pragma GCC diagnostic ignored "-Wabi"
+#pragma GCC diagnostic ignored "-Wabi=0" // Not working
+#pragma GCC diagnostic ignored "-Wabi=1" // Not working
+#pragma GCC diagnostic ignored "-Wabi=2"
 #endif
 template <TransformDispatchType Tag, Backend B, typename F>
 auto makePartialTransform(const Policy<B> policy, F&& f) {

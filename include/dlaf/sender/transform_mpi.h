@@ -11,6 +11,8 @@
 
 #include <type_traits>
 
+#include <pika/execution.hpp>
+
 #include <dlaf/common/consume_rvalues.h>
 #include <dlaf/common/pipeline.h>
 #include <dlaf/common/unwrap.h>
