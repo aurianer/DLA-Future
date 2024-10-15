@@ -20,13 +20,15 @@ import systems
 
 system = systems.cscs["todi"]
 
-dlafpath = "/user-environment/linux-sles15-neoverse_v2/gcc-13.3.0/dla-future-git.202410-develop_0.7.0-virbeq6o47zeihzraiblbc5zfxzafrpw/bin"
-matrixrefpath = ""
-run_dir = ""
+dlafpath = "/user-environment/linux-sles15-neoverse_v2/gcc-13.2.0/dla-future-git.202410-develop_0.7.0-oftql6yucxh5e2jkwjdvpqxxz5yjqh2w/bin"
+matrixrefpath = "/capstor/scratch/cscs/simbergm/src/DLA-Future"
+run_dir = f"~/ws/runs"
 
 time = 12 * 60  # minutes
 nruns = 10
-nodes_arr = [0.25, 0.5, 1, 2, 4, 8, 16, 32]
+#nodes_arr = [0.25, 0.5, 1, 2, 4, 8, 16, 32]
+#nodes_arr = [0.25, 0.5, 1, 2, 4, 8]
+nodes_arr = [0.25, 0.5, 1, 2, 4]
 
 rpn = 4
 m_szs_d = [10240, 20480, 30097, 40960]
