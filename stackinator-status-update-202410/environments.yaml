@@ -4,9 +4,9 @@ dlaf-env:
         spec: gcc@13
   unify: true
   specs:
-  - dla-future@git.202410-develop=0.7.0 +miniapps +hdf5 +mpi_gpu_aware +mpi_gpu_force_contiguous
-  - pika@0.29.0 cxxstd=20 +stdexec malloc=mimalloc
-  - stdexec@24.09
+  - dla-future@git.202410-develop=0.7.0+cuda%gcc@13 +miniapps +hdf5 +mpi_gpu_aware +mpi_gpu_force_contiguous ^cuda@12+allow-unsupported-compilers
+  - pika@0.29.0+cuda%gcc@13 cxxstd=20 +stdexec malloc=system
+  - stdexec@24.09%gcc@13
   - nvpl-blas
   - nvpl-lapack
   mpi:
@@ -16,3 +16,4 @@ dlaf-env:
     - +mpi
     - +cuda
     - cuda_arch=90
+    - arch=linux-sles15-neoverse_v2

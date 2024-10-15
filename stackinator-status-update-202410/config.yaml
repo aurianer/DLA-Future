@@ -1,9 +1,9 @@
 name: dlaf-env
 store: /user-environment
 spack:
-    repo: https://github.com/spack/spack.git
-    commit: develop-2024-10-06
+    repo: file:///capstor/scratch/cscs/aurianer/install/spack_dlaf_new_stdexec
+    commit: 883263340f079daff2d45168b4f9200548ef5cae
 mirror:
-    enable: false
+    enable: true
 modules: false
 description: "DLA-Future for 202410 status update"
