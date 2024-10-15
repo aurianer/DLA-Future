@@ -20,9 +20,9 @@ import systems
 
 system = systems.cscs["todi"]
 
-dlafpath = "/user-environment/linux-sles15-neoverse_v2/gcc-13.2.0/dla-future-git.202410-develop_0.7.0-oftql6yucxh5e2jkwjdvpqxxz5yjqh2w/bin"
+dlafpath = "/user-environment/linux-sles15-neoverse_v2/gcc-13.2.0/dla-future-git.202410-develop_0.7.0-zh6jn257e5jy6sy62iagoqz4474is67h/bin"
 matrixrefpath = "/capstor/scratch/cscs/simbergm/src/DLA-Future"
-run_dir = f"~/ws/runs"
+run_dir = f"~/ws/runs-stdexec"
 
 time = 6 * 60  # minutes (max for todi during HPL runs)
 nruns = 10

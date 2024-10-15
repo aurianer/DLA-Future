@@ -199,7 +199,7 @@ cscs["todi"] = {
     "Allowed rpns": [4],
     "Multiple rpn in same job": True,
     "GPU": True,
-    "Run command": "srun --uenv=/capstor/scratch/cscs/aurianer/squashfs/dlaf/dlaf-nostdexec-mimalloc-latest.squashfs:/user-environment -u {srun_args} -n {total_ranks} --gpus-per-task=1 --cpu-bind=core -c {threads_per_rank} timeout 1800",
+    "Run command": "srun --uenv=/capstor/scratch/cscs/aurianer/squashfs/dlaf/dlaf-stdexec-mimalloc-latest.squashfs:/user-environment -u {srun_args} -n {total_ranks} --gpus-per-task=1 --cpu-bind=core -c {threads_per_rank} timeout 1800",
     "Launch command": "sbatch --chdir={job_path} {job_file}",
     "Batch preamble": """
 #!/bin/bash -l
