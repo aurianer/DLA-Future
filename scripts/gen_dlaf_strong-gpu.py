@@ -16,13 +16,9 @@
 
 import argparse
 import miniapps as mp
-import systems
+#import systems
 
-system = systems.cscs["todi"]
-
-dlafpath = "/user-environment/linux-sles15-neoverse_v2/gcc-13.2.0/dla-future-git.202410-develop_0.7.0-zh6jn257e5jy6sy62iagoqz4474is67h/bin"
 matrixrefpath = "/capstor/scratch/cscs/simbergm/src/DLA-Future"
-run_dir = f"~/ws/runs-stdexec"
 
 time = 6 * 60  # minutes (max for todi during HPL runs)
 nruns = 10
@@ -40,14 +36,40 @@ extra_flags = "--pika:threads=64 --nwarmups=0"
 
 parser = argparse.ArgumentParser(description="Run strong scaling benchmarks.")
 parser.add_argument(
+    "--benchname",
+    help="Name of the comparison benchmark.",
+)
+parser.add_argument(
     "--debug",
     help="Don't submit jobs, only create job scripts instead.",
     action="store_true",
 )
+parser.add_argument(
+    "--dlafpath",
+    help="Path to the dla-future installation to test.",
+)
+parser.add_argument(
+    "--uenv",
+    help="Path to the squashfs image.",
+)
+parser.add_argument(
+    "--rundir",
+    help="Directory where the results will be stored.",
+    default=f"~/ws/runs",
+)
+
 args = parser.parse_args()
 
 debug = args.debug
+run_dir = args.rundir
+dlaf_path = args.dlafpath
+# TODO: use benchname in plots
+bench_name = args.benchname
 
+import builtins
+builtins.my_uenv_name = f"{args.uenv}"
+import systems
+system = systems.cscs["todi"]
 
 def createAndSubmitRun(run_dir, nodes_arr, dtype, **kwargs):
     if dtype == "d":
@@ -63,7 +85,7 @@ def createAndSubmitRun(run_dir, nodes_arr, dtype, **kwargs):
 
     full_kwargs = kwargs.copy()
     full_kwargs["lib"] = "dlaf"
-    full_kwargs["miniapp_dir"] = dlafpath
+    full_kwargs["miniapp_dir"] = dlaf_path
     full_kwargs["nruns"] = nruns
     full_kwargs["dtype"] = dtype
 
@@ -146,6 +168,6 @@ def createAndSubmitRun(run_dir, nodes_arr, dtype, **kwargs):
 createAndSubmitRun(run_dir, nodes_arr, "d", extra_flags=extra_flags)
 createAndSubmitRun(run_dir, nodes_arr, "z", extra_flags=extra_flags)
 
-# additional benchmark collecting "local" implementation results in <run_dir>-local directory
-createAndSubmitRun(run_dir + "-local", [1 / rpn], "d", extra_flags=extra_flags + " --local")
-createAndSubmitRun(run_dir + "-local", [1 / rpn], "z", extra_flags=extra_flags + " --local")
+## additional benchmark collecting "local" implementation results in <run_dir>-local directory
+#createAndSubmitRun(run_dir + "-local", [1 / rpn], "d", extra_flags=extra_flags + " --local")
+#createAndSubmitRun(run_dir + "-local", [1 / rpn], "z", extra_flags=extra_flags + " --local")

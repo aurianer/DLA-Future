@@ -29,6 +29,9 @@
 #                          Note: this function is invoked for both "Run command" and "Batch preamble", therefore some items are not always present.)
 # (*) Note: replace are done with the format command (extra care needed when using { or }).
 
+import builtins
+uenv_name = builtins.my_uenv_name
+
 cscs = {}
 
 cscs["daint-mc"] = {
@@ -199,7 +202,7 @@ cscs["todi"] = {
     "Allowed rpns": [4],
     "Multiple rpn in same job": True,
     "GPU": True,
-    "Run command": "srun --uenv=/capstor/scratch/cscs/aurianer/squashfs/dlaf/dlaf-stdexec-mimalloc-latest.squashfs:/user-environment -u {srun_args} -n {total_ranks} --gpus-per-task=1 --cpu-bind=core -c {threads_per_rank} timeout 1800",
+    "Run command": f"srun --uenv={uenv_name}:/user-environment" + " -u {srun_args} -n {total_ranks} --gpus-per-task=1 --cpu-bind=core -c {threads_per_rank} timeout 1800",
     "Launch command": "sbatch --chdir={job_path} {job_file}",
     "Batch preamble": """
 #!/bin/bash -l
